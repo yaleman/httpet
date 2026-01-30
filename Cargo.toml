@@ -1,0 +1,17 @@
+[package]
+name = "httpet"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+askama = "0.15.4"
+askama_web = { version = "0.15.1", features = ["axum-0.8"] }
+axum = { version = "0.8.8", features = ["macros"] }
+clap = { version = "4.5.56", features = ["derive", "env"] }
+sea-orm = "1.1.19"
+sea-orm-migration = { version = "1.1.19", features = ["sqlx-sqlite", "runtime-tokio-rustls"], default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+simple_logger = "5.1.0"
+tokio = { version = "1.49.0", features = ["macros", "net", "rt-multi-thread", "time", "tracing"] }
+tracing = { version = "0.1.44", features = ["log", "release_max_level_debug"] }
