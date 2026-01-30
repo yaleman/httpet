@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vote for {{ name }}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="vote-page">
+  <main>
+    <span class="status">HTTP {{ status_code }}</span>
+    <h1>Help bring {{ name }} to httpet</h1>
+    <p>This pet is not enabled yet. Vote to prioritize adding it to the lineup.</p>
+    <form method="post" action="/vote/{{ name }}">
+      <button type="submit">Vote for {{ name }}</button>
+    </form>
+  </main>
+</body>
+</html>

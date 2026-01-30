@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>httpet</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header>
+    <h1>httpet</h1>
+    <p>Pick a pet, grab a status code, and share the chaos.</p>
+  </header>
+  <main>
+    <section class="card">
+      <h2>Enabled pets</h2>
+      {% if enabled_pets.len() == 0 %}
+        <p>No pets are enabled yet. Vote below to add the next one.</p>
+      {% else %}
+        <div class="grid">
+          {% for pet in enabled_pets %}
+            <div class="pet">
+              <strong>{{ pet.name }}</strong>
+              <span class="pill">{{ pet.name }}.httpet.org</span>
+              <form method="post" action="/vote/{{ pet.name }}">
+                <button type="submit">Vote for {{ pet.name }}</button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <h2>Top votes (last 7 days)</h2>
+      {% if top_pets.len() == 0 %}
+        <p>No votes yet. Be the first to vote for a pet.</p>
+      {% else %}
+        <div class="top-list">
+          {% for pet in top_pets %}
+            <div class="top-item">
+              <div>
+                <strong>{{ pet.name }}</strong>
+                <span class="pill">{{ pet.votes }} votes</span>
+              </div>
+              <form method="post" action="/vote/{{ pet.name }}">
+                <button type="submit">Vote</button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

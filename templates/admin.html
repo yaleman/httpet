@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>httpet admin</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header>
+    <h1>httpet admin</h1>
+    <p>Votes over the last 30 days and pet configuration.</p>
+  </header>
+  <main>
+    <section class="card">
+      <h2>Add a pet</h2>
+      <form method="post" action="/admin/pets">
+        <label>
+          Name
+          <input type="text" name="name" placeholder="dog">
+        </label>
+        <label><input type="checkbox" name="enabled"> Enabled</label>
+        <button type="submit">Add pet</button>
+      </form>
+    </section>
+    {% if !has_pets %}
+      <section class="card">
+        <p>No pets found yet. Visit a pet subdomain or add one to start tracking.</p>
+      </section>
+    {% endif %}
+    <section class="pet-grid">
+      {% for pet in pets %}
+        <section class="card">
+          <div class="pet-header">
+            <div>
+              <h2>{{ pet.name }}</h2>
+              <p>{{ pet.name }}.httpet.org</p>
+            </div>
+            <span class="pill{% if pet.enabled %} enabled{% endif %}">{% if pet.enabled %}enabled{% else %}disabled{% endif %}</span>
+          </div>
+          {{ pet.chart_svg|safe }}
+          <div class="axis-labels">
+            <span>{{ start_label }}</span>
+            <span>{{ end_label }}</span>
+          </div>
+          <form method="post" action="/admin/pets/{{ pet.name }}">
+            <label><input type="checkbox" name="enabled" {% if pet.enabled %}checked{% endif %}> Enabled</label>
+            <button type="submit">Save</button>
+          </form>
+        </section>
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

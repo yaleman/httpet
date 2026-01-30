@@ -14,4 +14,6 @@ pub struct CliOptions {
         env = "HTTPET_LISTEN_ADDRESS"
     )]
     pub listen_address: String,
+    #[clap(long, short, default_value = "localhost", env = "HTTPET_BASE_DOMAIN")]
+    pub base_domain: String,
 }
