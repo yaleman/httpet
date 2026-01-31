@@ -5,3 +5,4 @@ services:
       - "4200:9000"
     volumes:
       - ./images:/images
+      - ./httpet.sqlite:/httpet.sqlite

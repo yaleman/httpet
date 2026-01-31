@@ -51,7 +51,7 @@
 
 - CLI flags map to env vars: `HTTPET_PORT`, `HTTPET_LISTEN_ADDRESS`, and `HTTPET_BASE_DOMAIN`.
 - Logging level is controlled by `--debug` (Info by default, Debug when set).
-- `docker-compose.yml` runs `ghcr.io/yaleman/httpet:latest` (built by GitHub Actions) and mounts `./images` to `/images` in the container.
+- `docker-compose.yml` runs `ghcr.io/yaleman/httpet:latest` (built by GitHub Actions) and mounts `./images` to `/images` plus `./httpet.sqlite` to `/httpet.sqlite` in the container.
 
 ## Documentation Hygiene
 
