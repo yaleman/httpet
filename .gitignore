@@ -1,3 +1,4 @@
 /target
 httpet.sqlite
 tarpaulin-report.html
+./db/

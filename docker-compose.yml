@@ -3,10 +3,12 @@ services:
     image: ghcr.io/yaleman/httpet:latest
     ports:
       - "4200:9000"
+    environment:
+      - HTTPET_DATABASE_PATH=/db/httpet.sqlite
     volumes:
       - type: bind
         source: ./images
         target: /images
       - type: bind
-        source: ./httpet.sqlite
-        target: /httpet.sqlite
+        source: ./db/
+        target: /db/

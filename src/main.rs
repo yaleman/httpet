@@ -31,7 +31,12 @@ async fn main() -> Result<ExitCode, Box<std::io::Error>> {
 
     setup_logging(cli.debug)?;
 
-    let db = match httpet::db::connect_db("httpet.sqlite", cli.debug).await {
+    let db = match httpet::db::connect_db(
+        cli.database_path.as_deref().unwrap_or("./db/httpet.sqlite"),
+        cli.debug,
+    )
+    .await
+    {
         Ok(db) => db,
         Err(err) => {
             error!("Database connection error: {}", err);
