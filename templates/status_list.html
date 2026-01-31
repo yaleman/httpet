@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ name }} status codes</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>{{ name }}.{{ base_domain }}</h1>
+      <p>Available status codes for {{ name }}.</p>
+    </header>
+    <main>
+      <section class="card">
+        <h2>Available status codes</h2>
+        {% if status_codes.len() == 0 %}
+        <p>No status images found yet.</p>
+        {% else %}
+        <div class="grid">
+          {% for code in status_codes %}
+          <div class="pet">
+            <strong>{{ code }}</strong>
+            <a class="pill" href="/{{ code }}">/{{ code }}</a>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>

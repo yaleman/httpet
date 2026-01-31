@@ -1,11 +1,12 @@
 use axum::extract::FromRequestParts;
-use axum::http::{header::HOST, request::Parts, StatusCode};
+use axum::http::header::HOST;
+use axum::http::request::Parts;
 
-use super::AppState;
+use super::prelude::*;
+use super::{AppState, normalize_pet_name};
 
 #[derive(Debug, Clone)]
 pub(crate) struct AnimalDomain {
-    pub(crate) host: String,
     pub(crate) animal: Option<String>,
 }
 
@@ -19,7 +20,7 @@ impl AnimalDomain {
             .to_ascii_lowercase();
         let animal = animal_from_host(base_domain, &host);
 
-        Self { host, animal }
+        Self { animal }
     }
 }
 
@@ -37,7 +38,7 @@ fn animal_from_host(base_domain: &str, host: &str) -> Option<String> {
         return None;
     }
 
-    Some(label.to_string())
+    Some(normalize_pet_name(label))
 }
 
 impl FromRequestParts<AppState> for AnimalDomain {

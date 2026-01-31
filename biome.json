@@ -1,0 +1,9 @@
+{
+	"overrides": [
+		{
+			"include": ["templates/**/*.html"],
+			"formatter": { "enabled": true },
+			"linter": { "enabled": true }
+		}
+	]
+}

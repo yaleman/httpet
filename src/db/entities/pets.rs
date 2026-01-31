@@ -1,18 +1,27 @@
+//! Database entities for pets
+
 use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "pets")]
+/// Pets that can be viewed/voted on
 pub struct Model {
     #[sea_orm(primary_key)]
+    /// db id
     pub id: i32,
+    /// pet name, should be normalised before insertion
     pub name: String,
+    /// whether the pet is enabled for access - can't vote if enabled
     pub enabled: bool,
+    /// creation timestamp
     pub created_at: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// relations for pets
 pub enum Relation {
     #[sea_orm(has_many = "super::votes::Entity")]
+    /// can't vote without a pet!
     Votes,
 }
 
@@ -24,12 +33,22 @@ impl Related<super::votes::Entity> for Entity {
 
 impl ActiveModelBehavior for ActiveModel {}
 
-pub async fn enabled(db: &DatabaseConnection) -> Result<Vec<String>, DbErr> {
-    Ok(Entity::find()
-        .filter(Column::Enabled.eq(true))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|pet| pet.name)
-        .collect())
+impl Entity {
+    /// List of enabled pet name
+    pub async fn enabled(db: &DatabaseConnection) -> Result<Vec<Model>, DbErr> {
+        Ok(Self::find()
+            .filter(Column::Enabled.eq(true))
+            .all(db)
+            .await?
+            .into_iter()
+            .collect())
+    }
+
+    /// Find a pet by name, helper function
+    pub async fn find_by_name<C: ConnectionTrait>(
+        db: &C,
+        pet_name: &str,
+    ) -> Result<Option<Model>, DbErr> {
+        Self::find().filter(Column::Name.eq(pet_name)).one(db).await
+    }
 }

@@ -1,11 +1,15 @@
+//! CLI parser
 use clap::Parser;
 use std::num::NonZeroU16;
 
 #[derive(Parser, Debug)]
+/// CLI Options
 pub struct CliOptions {
     #[clap(long, short, help = "Enable debug logging")]
+    /// enable debug logging
     pub debug: bool,
-    #[clap(long, short, default_value = "3000", env = "HTTPET_PORT")]
+    #[clap(long, short, default_value = "9000", env = "HTTPET_PORT")]
+    /// http listener, defaults to 9000
     pub port: NonZeroU16,
     #[clap(
         long,
@@ -13,7 +17,9 @@ pub struct CliOptions {
         default_value = "127.0.0.1",
         env = "HTTPET_LISTEN_ADDRESS"
     )]
+    /// Liten address, defaults to 127.0.0.1
     pub listen_address: String,
     #[clap(long, short, default_value = "localhost", env = "HTTPET_BASE_DOMAIN")]
+    /// Base domain, defaults to localhost, needs to be httpet.org in prod
     pub base_domain: String,
 }

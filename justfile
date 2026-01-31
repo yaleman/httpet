@@ -10,10 +10,10 @@ list:
 # Build the docker image locally using buildx
 docker_buildx:
     docker buildx build \
-        --tag ghcr.io/yaleman/filekid:latest \
-        --tag ghcr.io/yaleman/filekid:$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "filekid")  | .version') \
-        --tag ghcr.io/yaleman/filekid:$(git rev-parse HEAD) \
-        --label org.opencontainers.image.source=https://github.com/yaleman/filekid \
+        --tag ghcr.io/yaleman/httpet:latest \
+        --tag ghcr.io/yaleman/httpet:$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "httpet")  | .version') \
+        --tag ghcr.io/yaleman/httpet:$(git rev-parse HEAD) \
+        --label org.opencontainers.image.source=https://github.com/yaleman/httpet \
         --label org.opencontainers.image.revision=$(git rev-parse HEAD) \
         --label org.opencontainers.image.created=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
         .
@@ -21,10 +21,10 @@ docker_buildx:
 # Build the docker image locally
 docker_build:
     docker build \
-        --tag ghcr.io/yaleman/filekid:latest \
-        --tag ghcr.io/yaleman/filekid:$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "filekid")  | .version') \
-        --tag ghcr.io/yaleman/filekid:$(git rev-parse HEAD) \
-        --label org.opencontainers.image.source=https://github.com/yaleman/filekid \
+        --tag ghcr.io/yaleman/httpet:latest \
+        --tag ghcr.io/yaleman/httpet:$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "httpet")  | .version') \
+        --tag ghcr.io/yaleman/httpet:$(git rev-parse HEAD) \
+        --label org.opencontainers.image.source=https://github.com/yaleman/httpet \
         --label org.opencontainers.image.revision=$(git rev-parse HEAD) \
         --label org.opencontainers.image.created=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
         .
@@ -33,10 +33,10 @@ docker_build:
 docker_publish:
     docker buildx build \
         --platform linux/amd64,linux/arm64 \
-        --tag ghcr.io/yaleman/filekid:latest \
-        --tag ghcr.io/yaleman/filekid:$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "filekid")  | .version') \
-        --tag ghcr.io/yaleman/filekid:$(git rev-parse HEAD) \
-        --label org.opencontainers.image.source=https://github.com/yaleman/filekid \
+        --tag ghcr.io/yaleman/httpet:latest \
+        --tag ghcr.io/yaleman/httpet:$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "httpet")  | .version') \
+        --tag ghcr.io/yaleman/httpet:$(git rev-parse HEAD) \
+        --label org.opencontainers.image.source=https://github.com/yaleman/httpet \
         --label org.opencontainers.image.revision=$(git rev-parse HEAD) \
         --label org.opencontainers.image.created=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
         --push \
@@ -56,11 +56,11 @@ run_docker:
     docker run -it --rm \
         -p 8888:8888 \
         --init \
-        --mount "type=bind,source=$(pwd)/filekid.json,target=/filekid.json" \
+        --mount "type=bind,source=$(pwd)/httpet.json,target=/httpet.json" \
         --mount "type=bind,source=$(pwd)/,target=/data/" \
         --mount "type=bind,source=$CERTDIR,target=/certs/" \
         --mount "type=bind,source=./files,target=/files/" \
-        ghcr.io/yaleman/filekid:latest
+        ghcr.io/yaleman/httpet:latest
 
 # Run all the checks
 check: codespell clippy test doc_check
@@ -79,15 +79,15 @@ codespell:
 
 # Ask the clip for the judgement
 clippy:
-    cargo clippy --all-features
+    cargo clippy --all-features --quiet
 
 test:
-    cargo test
+    cargo test  --quiet
 
 # Things to do before a release
 release_prep: check doc semgrep
     cargo deny check
-    cargo build --release
+    cargo build --release --quiet
 
 # Semgrep things
 semgrep:
@@ -103,11 +103,11 @@ semgrep:
 
 # Build the rustdocs
 doc:
-	cargo doc --document-private-items
+	cargo doc --document-private-items --quiet
 
 # Run cargo tarpaulin
 coverage:
-    cargo tarpaulin --out Html
+    cargo tarpaulin --out Html --quiet
     @echo "Coverage file at file://$(PWD)/tarpaulin-report.html"
 
 # Run cargo tarpaulin and upload to coveralls
@@ -132,7 +132,7 @@ doc_fix:
 
 # Run trivy on the image
 trivy_image:
-    trivy image ghcr.io/yaleman/filekid:latest --scanners misconfig,vuln,secret
+    trivy image ghcr.io/yaleman/httpet:latest --scanners misconfig,vuln,secret
 
 # Run trivy on the repo
 trivy_repo:

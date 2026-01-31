@@ -1,44 +1,88 @@
+//! HTTPet main binary
+
+#![allow(clippy::multiple_crate_versions)]
+#![deny(clippy::all)]
+#![deny(clippy::await_holding_lock)]
+#![deny(clippy::complexity)]
+#![deny(clippy::correctness)]
+#![deny(clippy::disallowed_methods)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::needless_pass_by_value)]
+#![deny(clippy::panic)]
+#![deny(clippy::perf)]
+#![deny(clippy::trivially_copy_pass_by_ref)]
+#![deny(clippy::unreachable)]
+#![deny(clippy::unwrap_used)]
+#![deny(warnings)]
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+
+use std::process::ExitCode;
+
 use clap::Parser;
 use httpet::config::setup_logging;
 use sea_orm_migration::MigratorTrait;
-use tracing::error;
+use tokio::signal::{unix::SignalKind, unix::signal};
+use tracing::{error, info, warn};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
-async fn main() {
+async fn main() -> Result<ExitCode, Box<std::io::Error>> {
     let cli = httpet::cli::CliOptions::parse();
 
-    setup_logging(cli.debug);
+    setup_logging(cli.debug)?;
 
-    let db = match httpet::db::connect_db("httpet.sqlite").await {
+    let db = match httpet::db::connect_db("httpet.sqlite", cli.debug).await {
         Ok(db) => db,
         Err(err) => {
             error!("Database connection error: {}", err);
-            return;
+            return Err(Box::new(std::io::Error::other(err)));
         }
     };
 
-    if let Err(err) = httpet::db::migrations::Migrator::up(&db, None).await {
+    if let Err(err) = httpet::db::migrations::Migrator::up(db.as_ref(), None).await {
         error!("Database migration error: {}", err);
-        return;
+        return Err(Box::new(std::io::Error::other(err)));
     }
 
-    let enabled_pets = match httpet::db::entities::pets::enabled(&db).await {
-        Ok(pets) => pets,
-        Err(err) => {
-            error!("Failed to load enabled pets: {}", err);
-            return;
+    let mut hangup_waiter = signal(SignalKind::hangup())?;
+
+    loop {
+        let enabled_pets = match httpet::db::entities::pets::Entity::enabled(db.as_ref()).await {
+            Ok(pets) => pets.into_iter().map(|pet| pet.name).collect(),
+            Err(err) => {
+                error!("Failed to load enabled pets: {}", err);
+                return Err(Box::new(std::io::Error::other(err)));
+            }
+        };
+        tokio::select! {
+            res =  httpet::web::setup_server(
+            &cli.listen_address,
+            cli.port.get(),
+            &cli.base_domain,
+            enabled_pets,
+            db.clone(),
+            cli.port.get(),
+        ) => {
+            if let Err(err) = res {
+                    error!("Server error: {}", err);
+                    break;
+                } else {
+                    info!("Server has shut down gracefully.");
+                };
+            }
+
+            _ = hangup_waiter.recv() => {
+                warn!("Received SIGHUP, shutting down.");
+                break;
+                // TODO: Implement configuration reload logic here
+
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("Received Ctrl-C, shutting down.");
+                break;
+            }
         }
-    };
-
-    if let Err(err) = httpet::web::setup_server(
-        &cli.listen_address,
-        cli.port,
-        &cli.base_domain,
-        enabled_pets,
-        db,
-    )
-    .await
-    {
-        error!("Application error: {}", err);
     }
+
+    Ok(ExitCode::SUCCESS)
 }

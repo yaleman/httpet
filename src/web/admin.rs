@@ -1,16 +1,14 @@
-use std::collections::HashMap;
-
-use askama::Template;
-use axum::extract::{Form, Path, State};
-use axum::http::StatusCode;
-use axum::response::{Html, Redirect};
-use chrono::{Duration, NaiveDate, Utc};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
-use serde::Deserialize;
-
+use super::prelude::*;
+use super::{AppState, normalize_pet_name};
 use crate::db::entities::{pets, votes};
-
-use super::AppState;
+use askama::Template;
+use askama_web::WebTemplate;
+use axum::extract::{Form, Path, State};
+use axum::response::Redirect;
+use chrono::{Duration, NaiveDate, Utc};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 pub(crate) struct PetUpdateForm {
@@ -30,33 +28,32 @@ struct AdminPetView {
     chart_svg: String,
 }
 
-#[derive(Template)]
+#[derive(Template, WebTemplate)]
 #[template(path = "admin.html")]
-struct AdminTemplate {
+pub(crate) struct AdminTemplate {
     pets: Vec<AdminPetView>,
     start_label: String,
     end_label: String,
     has_pets: bool,
+    base_domain: String,
 }
 
 pub(crate) async fn admin_handler(
     State(state): State<AppState>,
-) -> Result<Html<String>, StatusCode> {
+) -> Result<AdminTemplate, HttpetError> {
     let db = &state.db;
     let pets_list = pets::Entity::find()
         .order_by_asc(pets::Column::Name)
-        .all(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .all(db.as_ref())
+        .await?;
 
     let today = Utc::now().date_naive();
     let start_date = today - Duration::days(29);
     let votes_list = votes::Entity::find()
         .filter(votes::Column::VoteDate.between(start_date, today))
         .order_by_asc(votes::Column::VoteDate)
-        .all(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .all(db.as_ref())
+        .await?;
 
     let mut vote_map: HashMap<i32, HashMap<NaiveDate, i32>> = HashMap::new();
     for vote in votes_list {
@@ -73,8 +70,12 @@ pub(crate) async fn admin_handler(
     let pets = pets_list
         .into_iter()
         .map(|pet| {
-            let vote_counts = build_vote_series(&date_labels, vote_map.get(&pet.id));
-            let chart_svg = render_vote_chart(&vote_counts);
+            let chart_svg = if pet.enabled {
+                String::new()
+            } else {
+                let vote_counts = build_vote_series(&date_labels, vote_map.get(&pet.id));
+                render_vote_chart(&vote_counts)
+            };
             AdminPetView {
                 name: pet.name,
                 enabled: pet.enabled,
@@ -83,123 +84,41 @@ pub(crate) async fn admin_handler(
         })
         .collect::<Vec<_>>();
 
-    let start_label = date_labels
-        .first()
-        .map(format_date)
-        .unwrap_or_default();
-    let end_label = date_labels
-        .last()
-        .map(format_date)
-        .unwrap_or_default();
+    let start_label = date_labels.first().map(format_date).unwrap_or_default();
+    let end_label = date_labels.last().map(format_date).unwrap_or_default();
 
-    let template = AdminTemplate {
+    Ok(AdminTemplate {
         has_pets: !pets.is_empty(),
         pets,
         start_label,
         end_label,
-    };
-
-    let html = template
-        .render()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Html(html))
+        base_domain: state.base_domain.clone(),
+    })
 }
 
 pub(crate) async fn update_pet_handler(
     State(state): State<AppState>,
     Path(name): Path<String>,
     Form(form): Form<PetUpdateForm>,
-) -> Result<Redirect, StatusCode> {
+) -> Result<Redirect, HttpetError> {
+    let name = normalize_pet_name(&name);
+
     let enabled = form.enabled.is_some();
-
-    let db = &state.db;
-    let existing = pets::Entity::find()
-        .filter(pets::Column::Name.eq(&name))
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    match existing {
-        Some(model) => {
-            let mut active: pets::ActiveModel = model.into();
-            active.enabled = Set(enabled);
-            active
-                .update(db)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        None => {
-            let active = pets::ActiveModel {
-                name: Set(name.clone()),
-                enabled: Set(enabled),
-                ..Default::default()
-            };
-            active
-                .insert(db)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-    }
-
-    let mut enabled_pets = state.enabled_pets.write().await;
-    if enabled {
-        if !enabled_pets.contains(&name) {
-            enabled_pets.push(name);
-        }
-    } else {
-        enabled_pets.retain(|entry| entry != &name);
-    }
-
+    state.create_or_update_pet(&name, enabled).await?;
     Ok(Redirect::to("/admin/"))
 }
 
 pub(crate) async fn create_pet_handler(
     State(state): State<AppState>,
     Form(form): Form<PetCreateForm>,
-) -> Result<Redirect, StatusCode> {
-    let name = form.name.trim().to_string();
+) -> Result<Redirect, HttpetError> {
+    let name = normalize_pet_name(&form.name);
     if name.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(HttpetError::BadRequest);
     }
+
     let enabled = form.enabled.is_some();
-
-    let db = &state.db;
-    let existing = pets::Entity::find()
-        .filter(pets::Column::Name.eq(&name))
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    match existing {
-        Some(model) => {
-            let mut active: pets::ActiveModel = model.into();
-            active.enabled = Set(enabled);
-            active
-                .update(db)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        None => {
-            let active = pets::ActiveModel {
-                name: Set(name.clone()),
-                enabled: Set(enabled),
-                ..Default::default()
-            };
-            active
-                .insert(db)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-    }
-
-    let mut enabled_pets = state.enabled_pets.write().await;
-    if enabled {
-        if !enabled_pets.contains(&name) {
-            enabled_pets.push(name);
-        }
-    } else {
-        enabled_pets.retain(|entry| entry != &name);
-    }
+    state.create_or_update_pet(&name, enabled).await?;
 
     Ok(Redirect::to("/admin/"))
 }
@@ -259,6 +178,8 @@ fn render_vote_chart(counts: &[i32]) -> String {
     )
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // so that we can use it in map()
+/// Formats a date as "Mon DD"
 fn format_date(date: &NaiveDate) -> String {
     date.format("%b %d").to_string()
 }

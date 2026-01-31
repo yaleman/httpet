@@ -55,12 +55,6 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(0),
                     )
-                    .col(
-                        ColumnDef::new(Votes::CreatedAt)
-                            .date_time()
-                            .not_null()
-                            .default(Expr::current_timestamp()),
-                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_votes_pet")
@@ -110,5 +104,4 @@ enum Votes {
     PetId,
     VoteDate,
     VoteCount,
-    CreatedAt,
 }

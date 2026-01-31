@@ -13,13 +13,13 @@
 - `src/web/` contains HTTP routing/handlers; add new routes here.
 - `src/cli.rs` defines CLI flags and env var bindings (e.g., `HTTPET_PORT`).
 - `src/config.rs` configures logging.
-- `src/db/` is reserved for database code; `src/db/migrations/` is currently empty.
+- `src/db/` is reserved for database code; `src/db/migrations/` contains SeaORM migrations.
 - `target/` is build output and should not be edited or committed.
 
 ## Build, Test, and Development Commands
 
 - `cargo run -- --debug --port 3000 --listen-address 127.0.0.1`: run the server with CLI flags.
-- `cargo test`: run Rust unit tests (none are defined yet).
+- `cargo test`: run Rust unit tests.
 - `cargo clippy --all-features`: lint the codebase.
 - `just run`: wrapper for `cargo run`.
 - `just test`: preferred test runner (wraps `cargo test`).
@@ -32,6 +32,7 @@
 - Run `cargo fmt` (rustfmt defaults) before committing.
 - Use `snake_case` for modules/functions and `UpperCamelCase` for types.
 - Keep handlers in `src/web/` and CLI options in `src/cli.rs` to avoid drift.
+- Inline CSS is not allowed; add styles to `static/styles.css` and reference it from templates.
 
 ## Testing Guidelines
 
