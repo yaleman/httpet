@@ -1,0 +1,7 @@
+services:
+  httpet:
+    image: ghcr.io/yaleman/httpet:latest
+    ports:
+      - "4200:9000"
+    volumes:
+      - ./images:/images
