@@ -4,5 +4,9 @@ services:
     ports:
       - "4200:9000"
     volumes:
-      - ./images:/images
-      - ./httpet.sqlite:/httpet.sqlite
+      - type: bind
+        source: ./images
+        target: /images
+      - type: bind
+        source: ./httpet.sqlite
+        target: /httpet.sqlite
