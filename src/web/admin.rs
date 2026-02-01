@@ -1,6 +1,6 @@
 use super::prelude::*;
 use crate::db::entities::{pets, votes};
-use axum::extract::{Form, Path, State};
+use axum::extract::{Form, Multipart, Path, State};
 use axum::response::Redirect;
 use chrono::{Duration, NaiveDate, Utc};
 #[allow(unused_imports)]
@@ -115,6 +115,85 @@ pub(crate) async fn create_pet_handler(
     state.create_or_update_pet(&name, enabled).await?;
 
     Ok(Redirect::to("/admin/"))
+}
+
+pub(crate) async fn upload_image_handler(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Redirect, HttpetError> {
+    let mut pet_name: Option<String> = None;
+    let mut status_code: Option<u16> = None;
+    let mut image_bytes: Option<Vec<u8>> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?
+    {
+        let field_name = field.name().unwrap_or_default();
+        match field_name {
+            "pet" => {
+                let name = field
+                    .text()
+                    .await
+                    .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+                pet_name = Some(normalize_pet_name(&name));
+            }
+            "status_code" => {
+                let code = field
+                    .text()
+                    .await
+                    .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+                let parsed = code
+                    .parse::<u16>()
+                    .map_err(|_| HttpetError::BadRequest)?;
+                if !(100..=599).contains(&parsed) {
+                    return Err(HttpetError::BadRequest);
+                }
+                status_code = Some(parsed);
+            }
+            "image" => {
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+                image_bytes = Some(bytes.to_vec());
+            }
+            _ => {}
+        }
+    }
+
+    let pet_name = pet_name.filter(|name| !name.is_empty()).ok_or(HttpetError::BadRequest)?;
+    let status_code = status_code.ok_or(HttpetError::BadRequest)?;
+    let image_bytes = image_bytes.ok_or(HttpetError::BadRequest)?;
+    if !is_valid_jpeg(&image_bytes) {
+        return Err(HttpetError::BadRequest);
+    }
+
+    let pet_exists = pets::Entity::find_by_name(state.db.as_ref(), &pet_name)
+        .await?
+        .is_some();
+    if !pet_exists {
+        return Err(HttpetError::BadRequest);
+    }
+
+    let pet_dir = state.image_dir.join(&pet_name);
+    tokio::fs::create_dir_all(&pet_dir)
+        .await
+        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+    let image_path = pet_dir.join(format!("{status_code}.jpg"));
+    tokio::fs::write(&image_path, image_bytes)
+        .await
+        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+
+    Ok(Redirect::to("/admin/"))
+}
+
+fn is_valid_jpeg(bytes: &[u8]) -> bool {
+    if bytes.len() < 4 {
+        return false;
+    }
+    bytes.starts_with(&[0xFF, 0xD8]) && bytes.ends_with(&[0xFF, 0xD9])
 }
 
 /// zips the dates and votes into a series of vote counts

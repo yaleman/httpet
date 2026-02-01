@@ -23,6 +23,32 @@
           <button type="submit">Add pet</button>
         </form>
       </section>
+      <section class="card">
+        <h2>Upload a status image</h2>
+        {% if has_pets %}
+        <form method="post" action="/admin/images" enctype="multipart/form-data">
+          <label>
+            Pet
+            <select name="pet">
+              {% for pet in pets %}
+              <option value="{{ pet.name }}">{{ pet.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Status code
+            <input type="number" name="status_code" min="100" max="599" placeholder="404" required>
+          </label>
+          <label>
+            JPEG image
+            <input type="file" name="image" accept="image/jpeg" required>
+          </label>
+          <button type="submit">Upload image</button>
+        </form>
+        {% else %}
+        <p>Add a pet first to upload status images.</p>
+        {% endif %}
+      </section>
       {% if !has_pets %}
       <section class="card">
         <p>No pets found yet. Visit a pet subdomain or add one to start tracking.</p>

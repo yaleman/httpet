@@ -20,7 +20,7 @@ mod views;
 
 use prelude::*;
 
-use admin::{admin_handler, create_pet_handler, update_pet_handler};
+use admin::{admin_handler, create_pet_handler, update_pet_handler, upload_image_handler};
 use middleware::{AnimalDomain, admin_base_domain_only};
 use url::Url;
 use views::{VotePageTemplate, VoteThanksTemplate};
@@ -307,6 +307,7 @@ fn create_router(state: &AppState) -> Router<AppState> {
             "/admin/pets/{name}",
             axum::routing::post(update_pet_handler),
         )
+        .route("/admin/images", axum::routing::post(upload_image_handler))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             admin_base_domain_only,
@@ -452,6 +453,33 @@ mod tests {
             .expect("collect body")
             .to_bytes();
         String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    fn multipart_body(boundary: &str, parts: Vec<(&str, Vec<u8>, Option<&str>)>) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (name, content, filename) in parts {
+            body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+            if let Some(filename) = filename {
+                body.extend_from_slice(
+                    format!(
+                        "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
+                        name, filename
+                    )
+                    .as_bytes(),
+                );
+                body.extend_from_slice(b"Content-Type: image/jpeg\r\n\r\n");
+                body.extend_from_slice(&content);
+                body.extend_from_slice(b"\r\n");
+            } else {
+                body.extend_from_slice(
+                    format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name).as_bytes(),
+                );
+                body.extend_from_slice(&content);
+                body.extend_from_slice(b"\r\n");
+            }
+        }
+        body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+        body
     }
 
     #[tokio::test]
@@ -935,6 +963,47 @@ mod tests {
             .expect("fetch pet")
             .expect("pet exists");
         assert!(pet.enabled);
+    }
+
+    #[tokio::test]
+    async fn admin_upload_saves_jpeg() {
+        let state = setup_test_state().await;
+        state
+            .app_state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+
+        let boundary = "boundary123";
+        let body = multipart_body(
+            boundary,
+            vec![
+                ("pet", b"dog".to_vec(), None),
+                ("status_code", b"201".to_vec(), None),
+                ("image", vec![0xFF, 0xD8, 0xFF, 0xD9], Some("dog.jpg")),
+            ],
+        );
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/admin/images")
+            .header("host", TEST_BASE_DOMAIN)
+            .header(
+                CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let image_path = state.app_state.image_dir.join("dog/201.jpg");
+        let metadata = tokio::fs::metadata(&image_path)
+            .await
+            .expect("uploaded file metadata");
+        assert!(metadata.is_file());
     }
 
     #[tokio::test]
