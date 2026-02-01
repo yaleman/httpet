@@ -107,7 +107,7 @@ doc:
 
 # Run cargo tarpaulin
 coverage:
-    cargo tarpaulin --out Html --quiet
+    cargo tarpaulin --out Html
     @echo "Coverage file at file://$(PWD)/tarpaulin-report.html"
 
 # Run cargo tarpaulin and upload to coveralls

@@ -43,7 +43,10 @@ impl AppState {
         image_dir: PathBuf,
         listen_port: u16,
     ) -> Self {
-        let base_domain = base_domain.trim_end_matches('.').to_ascii_lowercase();
+        let base_domain = base_domain
+            .trim()
+            .trim_end_matches(['.', '/'])
+            .to_ascii_lowercase();
 
         Self {
             base_domain,
@@ -371,6 +374,7 @@ mod tests {
     use sea_orm_migration::MigratorTrait;
     use tempfile::TempDir;
     use tower::ServiceExt;
+    use url::Url;
 
     struct TestState {
         app_state: AppState,
@@ -412,6 +416,39 @@ mod tests {
             .expect("collect body")
             .to_bytes();
         String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    #[tokio::test]
+    async fn app_state_base_urls_trim_trailing_slashes() {
+        let db = crate::db::connect_test_db().await.expect("connect test db");
+        let image_dir = tempfile::tempdir().expect("create temp image dir");
+
+        let app_state = AppState::new(
+            "example.com/",
+            None,
+            Vec::new(),
+            db.clone(),
+            image_dir.path().to_path_buf(),
+            3000,
+        );
+        assert_eq!(app_state.base_url(), "http://example.com:3000");
+        assert!(!app_state.base_url().ends_with('/'));
+        assert_eq!(app_state.pet_base_url("dog"), "http://dog.example.com:3000");
+        assert!(!app_state.pet_base_url("dog").ends_with('/'));
+
+        let frontend_url = Url::parse("https://example.com/front/").expect("parse frontend url");
+        let app_state = AppState::new(
+            "example.com",
+            Some(frontend_url),
+            Vec::new(),
+            db,
+            image_dir.path().to_path_buf(),
+            443,
+        );
+        assert_eq!(app_state.base_url(), "https://example.com/front");
+        assert!(!app_state.base_url().ends_with('/'));
+        assert_eq!(app_state.pet_base_url("dog"), "https://dog.example.com/front");
+        assert!(!app_state.pet_base_url("dog").ends_with('/'));
     }
 
     #[tokio::test]
