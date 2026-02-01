@@ -8,6 +8,8 @@ use tracing::info;
 pub enum HttpetError {
     /// When you didn't do the right thing
     BadRequest,
+    /// Missing or invalid session
+    Unauthorized,
     /// When DB operations fail
     DatabaseError(sea_orm::DbErr),
     /// When a requested resource is not found
@@ -37,6 +39,12 @@ impl From<axum::http::Error> for HttpetError {
     }
 }
 
+impl From<url::ParseError> for HttpetError {
+    fn from(err: url::ParseError) -> Self {
+        HttpetError::InternalServerError(err.to_string())
+    }
+}
+
 impl IntoResponse for HttpetError {
     fn into_response(self) -> axum::response::Response {
         match self {
@@ -48,6 +56,14 @@ impl IntoResponse for HttpetError {
                 let mut response =
                     axum::response::Response::new(axum::body::Body::from("Bad Request"));
                 *response.status_mut() = axum::http::StatusCode::BAD_REQUEST;
+                response
+            }
+            HttpetError::Unauthorized => {
+                info!("Unauthorized request received");
+                let mut response = axum::response::Response::new(axum::body::Body::from(
+                    "Unauthorized: invalid or missing session.",
+                ));
+                *response.status_mut() = axum::http::StatusCode::UNAUTHORIZED;
                 response
             }
             HttpetError::DatabaseError(err) => {

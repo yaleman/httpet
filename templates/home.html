@@ -40,6 +40,7 @@
             <div>
               <span class="pill">
                 <form method="post" action="/vote/{{ pet.name }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <strong>{{ pet.name }}</strong>
                   ({{ pet.votes }} votes)
                   <button type="submit">Vote</button>
@@ -56,6 +57,7 @@
         <h2>Vote for a pet</h2>
         <p>Vote for an existing pet or add a new one to the list.</p>
         <form method="post" action="/vote">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Name
             <input type="text" name="name" placeholder="dog">

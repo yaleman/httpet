@@ -27,6 +27,7 @@
         <h2>Upload a status image</h2>
         {% if has_pets %}
         <form method="post" action="/admin/images" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Pet
             <select name="pet">

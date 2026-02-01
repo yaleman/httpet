@@ -71,7 +71,7 @@ async fn main() -> Result<ExitCode, Box<std::io::Error>> {
             db.clone(),
         ) => {
             if let Err(err) = res {
-                    error!("Server error: {}", err);
+                    error!("Server error: {:?}", err);
                     break;
                 } else {
                     info!("Server has shut down gracefully.");

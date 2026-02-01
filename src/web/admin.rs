@@ -1,4 +1,5 @@
 use super::prelude::*;
+use super::csrf::{csrf_token, validate_csrf};
 use crate::db::entities::{pets, votes};
 use axum::extract::{Form, Multipart, Path, State};
 use axum::response::Redirect;
@@ -34,10 +35,12 @@ pub(crate) struct AdminTemplate {
     end_label: String,
     has_pets: bool,
     state: AppState,
+    csrf_token: String,
 }
 
 pub(crate) async fn admin_handler(
     State(state): State<AppState>,
+    session: Session,
 ) -> Result<AdminTemplate, HttpetError> {
     let today = Utc::now().date_naive();
     let start_date = today - Duration::days(29);
@@ -80,12 +83,14 @@ pub(crate) async fn admin_handler(
     let start_label = date_labels.first().map(format_date).unwrap_or_default();
     let end_label = date_labels.last().map(format_date).unwrap_or_default();
 
+    let csrf_token = csrf_token(&session).await?;
     Ok(AdminTemplate {
         has_pets: !pets.is_empty(),
         pets,
         start_label,
         end_label,
         state,
+        csrf_token,
     })
 }
 
@@ -119,11 +124,13 @@ pub(crate) async fn create_pet_handler(
 
 pub(crate) async fn upload_image_handler(
     State(state): State<AppState>,
+    session: Session,
     mut multipart: Multipart,
 ) -> Result<Redirect, HttpetError> {
     let mut pet_name: Option<String> = None;
     let mut status_code: Option<u16> = None;
     let mut image_bytes: Option<Vec<u8>> = None;
+    let mut csrf_token_value: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -138,6 +145,13 @@ pub(crate) async fn upload_image_handler(
                     .await
                     .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
                 pet_name = Some(normalize_pet_name(&name));
+            }
+            "csrf_token" => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+                csrf_token_value = Some(value);
             }
             "status_code" => {
                 let code = field
@@ -166,6 +180,8 @@ pub(crate) async fn upload_image_handler(
     let pet_name = pet_name.filter(|name| !name.is_empty()).ok_or(HttpetError::BadRequest)?;
     let status_code = status_code.ok_or(HttpetError::BadRequest)?;
     let image_bytes = image_bytes.ok_or(HttpetError::BadRequest)?;
+    let csrf_token_value = csrf_token_value.ok_or(HttpetError::BadRequest)?;
+    validate_csrf(&session, &csrf_token_value).await?;
     if !is_valid_jpeg(&image_bytes) {
         return Err(HttpetError::BadRequest);
     }

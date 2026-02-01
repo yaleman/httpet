@@ -1,6 +1,7 @@
 //! Web server/views/everything
 
 use std::path::{Path as StdPath, PathBuf};
+use std::str::FromStr;
 
 use crate::cli::CliOptions;
 use crate::constants::{IMAGE_DIR, X_HTTPET_ANIMAL};
@@ -10,10 +11,14 @@ use rand::prelude::IndexedRandom;
 use sea_orm::{DatabaseTransaction, IntoActiveModel, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
+use time::Duration;
 use tokio::sync::RwLock;
 use tower_http::services::ServeDir;
+use tower_sessions::session::Expiry;
+use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 
 mod admin;
+mod csrf;
 mod middleware;
 mod prelude;
 mod views;
@@ -21,6 +26,7 @@ mod views;
 use prelude::*;
 
 use admin::{admin_handler, create_pet_handler, update_pet_handler, upload_image_handler};
+use csrf::validate_csrf;
 use middleware::{AnimalDomain, admin_base_domain_only};
 use url::Url;
 use views::{VotePageTemplate, VoteThanksTemplate};
@@ -237,7 +243,10 @@ async fn pet_status_response(
 async fn vote_pet_handler(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    session: Session,
+    Form(form): Form<VotePetForm>,
 ) -> Result<VoteThanksTemplate, HttpetError> {
+    validate_csrf(&session, &form.csrf_token).await?;
     let name = normalize_pet_name(&name);
     record_vote(&state.db, &name).await?;
     Ok(VoteThanksTemplate { name: name.clone() })
@@ -246,22 +255,33 @@ async fn vote_pet_handler(
 /// View for voting page
 async fn vote_pet_view(
     State(_appstate): State<AppState>,
+    session: Session,
     Path(name): Path<String>,
-) -> VotePageTemplate {
-    VotePageTemplate {
+) -> Result<VotePageTemplate, HttpetError> {
+    let csrf_token = csrf::csrf_token(&session).await?;
+    Ok(VotePageTemplate {
         name: normalize_pet_name(&name),
-    }
+        csrf_token,
+    })
 }
 
 #[derive(Deserialize)]
 struct VoteForm {
     name: String,
+    csrf_token: String,
+}
+
+#[derive(Deserialize)]
+struct VotePetForm {
+    csrf_token: String,
 }
 
 async fn vote_form_handler(
     State(state): State<AppState>,
+    session: Session,
     Form(form): Form<VoteForm>,
 ) -> Result<VoteThanksTemplate, HttpetError> {
+    validate_csrf(&session, &form.csrf_token).await?;
     let name = normalize_pet_name(&form.name);
     if name.is_empty() {
         return Err(HttpetError::BadRequest);
@@ -298,7 +318,7 @@ async fn pet_status_handler(
     pet_status_response(&state, &pet, path.status_code).await
 }
 
-fn create_router(state: &AppState) -> Router<AppState> {
+fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
     let static_service = ServeDir::new("./static").append_index_html_on_directories(false);
     let admin_routes = Router::new()
         .route("/admin/", axum::routing::get(admin_handler))
@@ -312,7 +332,14 @@ fn create_router(state: &AppState) -> Router<AppState> {
             state.clone(),
             admin_base_domain_only,
         ));
-    Router::new()
+    let url = Url::from_str(&state.base_url())?;
+
+    let secure_cookies = state.listen_port == 443 || url.scheme() == "https";
+    let session_layer = SessionManagerLayer::new(MemoryStore::default())
+        .with_expiry(Expiry::OnInactivity(Duration::seconds(60)))
+        .with_secure(secure_cookies)
+        .with_always_save(true);
+    Ok(Router::new()
         .merge(admin_routes)
         .route("/", axum::routing::get(views::root_handler))
         .route("/vote", axum::routing::post(vote_form_handler))
@@ -327,6 +354,7 @@ fn create_router(state: &AppState) -> Router<AppState> {
         .route("/{segment}/", axum::routing::get(pet_or_status_handler))
         .route("/{segment}", axum::routing::get(pet_or_status_handler))
         .nest_service("/static", axum::routing::get_service(static_service))
+        .layer(session_layer))
 }
 
 pub(crate) fn normalize_pet_name(name: &str) -> String {
@@ -374,7 +402,7 @@ pub async fn setup_server(
     cli: &CliOptions,
     enabled_pets: Vec<String>,
     db: Arc<DatabaseConnection>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), HttpetError> {
     let app_state = AppState::new(
         cli.base_domain.as_str(),
         cli.frontend_url.clone(),
@@ -383,7 +411,7 @@ pub async fn setup_server(
         IMAGE_DIR.clone(),
         cli.port.get(),
     );
-    let app = create_router(&app_state).with_state(app_state);
+    let app = create_router(&app_state)?.with_state(app_state);
 
     let addr = format!("{}:{}", cli.listen_address, cli.port.get());
     info!("Starting server on http://{}", addr);
@@ -404,20 +432,26 @@ mod tests {
     use super::*;
 
     use axum::body::Body;
-    use axum::http::{Request, header::CONTENT_TYPE};
+    use axum::http::{
+        Request,
+        header::{CONTENT_TYPE, SET_COOKIE},
+    };
     use http_body_util::BodyExt;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     use sea_orm_migration::MigratorTrait;
-    use tempfile::TempDir;
     use tower::ServiceExt;
     use url::Url;
 
-    struct TestState {
-        app_state: AppState,
-        _image_dir: TempDir,
+    pub(crate) async fn get_test_app() -> (AppState, Router) {
+        let state = setup_test_state().await;
+
+        let app = create_router(&state)
+            .expect("Failed to create router")
+            .with_state(state.clone());
+        (state, app)
     }
 
-    async fn setup_test_state() -> TestState {
+    async fn setup_test_state() -> AppState {
         let _ = setup_logging(true);
         crate::status_codes::init().expect("load status code metadata");
         let db = crate::db::connect_test_db().await.expect("connect test db");
@@ -439,10 +473,7 @@ mod tests {
             image_dir.path().to_path_buf(),
             0,
         );
-        TestState {
-            app_state,
-            _image_dir: image_dir,
-        }
+        app_state
     }
 
     async fn read_body(response: axum::response::Response) -> String {
@@ -453,6 +484,28 @@ mod tests {
             .expect("collect body")
             .to_bytes();
         String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    async fn read_body_and_cookie(response: axum::response::Response) -> (String, Option<String>) {
+        let (parts, body) = response.into_parts();
+        let cookie = parts
+            .headers
+            .get(SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(|value| value.to_string());
+        let bytes = body.collect().await.expect("collect body").to_bytes();
+        (String::from_utf8_lossy(&bytes).to_string(), cookie)
+    }
+
+    fn extract_csrf_token(body: &str) -> String {
+        let marker = "name=\"csrf_token\" value=\"";
+        let start = body.find(marker).expect("missing csrf token") + marker.len();
+        let end = body[start..]
+            .find('"')
+            .map(|offset| start + offset)
+            .expect("invalid csrf token");
+        body[start..end].to_string()
     }
 
     fn multipart_body(boundary: &str, parts: Vec<(&str, Vec<u8>, Option<&str>)>) -> Vec<u8> {
@@ -520,8 +573,7 @@ mod tests {
 
     #[tokio::test]
     async fn unenabled_pet_returns_vote_page() {
-        let state = setup_test_state().await;
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        let (_state, app) = get_test_app().await;
 
         let request = Request::builder()
             .method("GET")
@@ -543,16 +595,13 @@ mod tests {
 
     #[tokio::test]
     async fn enabled_pet_sets_header_and_status() {
-        let state = setup_test_state().await;
+        let (state, app) = get_test_app().await;
         state
-            .app_state
             .create_or_update_pet("dog", true)
             .await
             .expect("create pet");
 
-        let _image_path = state.app_state.write_test_image("dog", 200);
-
-        let app: Router = create_router(&state.app_state).with_state(state.app_state.clone());
+        state.write_test_image("dog", 200);
 
         let request = Request::builder()
             .method("GET")
@@ -586,15 +635,13 @@ mod tests {
 
     #[tokio::test]
     async fn root_status_returns_enabled_pet_image() {
-        let state = setup_test_state().await;
+        let (state, app) = get_test_app().await;
         state
-            .app_state
             .create_or_update_pet("capybara", true)
             .await
             .expect("create pet");
 
-        let _image_path = state.app_state.write_test_image("capybara", 418);
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        state.write_test_image("capybara", 418);
 
         let request = Request::builder()
             .method("GET")
@@ -625,21 +672,32 @@ mod tests {
 
     #[tokio::test]
     async fn vote_endpoint_increments_daily_votes() {
-        let state = setup_test_state().await;
-        let db = state.app_state.db.clone();
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        let (state, app) = get_test_app().await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/vote/cat")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let (body, cookie) = read_body_and_cookie(response).await;
+        let csrf_token = extract_csrf_token(&body);
+        let cookie = cookie.expect("missing session cookie");
 
         for _ in 0..2 {
             let request = Request::builder()
                 .method("POST")
                 .uri("/vote/cat")
-                .body(Body::empty())
+                .header("cookie", &cookie)
+                .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={csrf_token}")))
                 .expect("create request");
             let response = app.clone().oneshot(request).await.expect("send request");
             assert_eq!(response.status(), StatusCode::OK);
         }
 
-        let pet = pets::Entity::find_by_name(db.as_ref(), "cat")
+        let pet = pets::Entity::find_by_name(state.db.as_ref(), "cat")
             .await
             .expect("fetch pet")
             .expect("pet exists");
@@ -647,7 +705,7 @@ mod tests {
         let vote = votes::Entity::find()
             .filter(votes::Column::PetId.eq(pet.id))
             .filter(votes::Column::VoteDate.eq(today))
-            .one(db.as_ref())
+            .one(state.db.as_ref())
             .await
             .expect("fetch votes")
             .expect("vote exists");
@@ -657,22 +715,32 @@ mod tests {
 
     #[tokio::test]
     async fn vote_form_adds_pet() {
-        let state = setup_test_state().await;
-        let db = state.app_state.db.clone();
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        let (state, app) = get_test_app().await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let (body, cookie) = read_body_and_cookie(response).await;
+        let csrf_token = extract_csrf_token(&body);
+        let cookie = cookie.expect("missing session cookie");
 
         let request = Request::builder()
             .method("POST")
             .uri("/vote")
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from("name=lynx"))
+            .header("cookie", &cookie)
+            .body(Body::from(format!("name=lynx&csrf_token={csrf_token}")))
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
         assert_eq!(response.status(), StatusCode::OK);
 
         let pet = pets::Entity::find()
             .filter(pets::Column::Name.eq("lynx"))
-            .one(db.as_ref())
+            .one(state.db.as_ref())
             .await
             .expect("fetch pet")
             .expect("pet exists");
@@ -680,7 +748,7 @@ mod tests {
         let vote = votes::Entity::find()
             .filter(votes::Column::PetId.eq(pet.id))
             .filter(votes::Column::VoteDate.eq(today))
-            .one(db.as_ref())
+            .one(state.db.as_ref())
             .await
             .expect("fetch vote")
             .expect("vote exists");
@@ -689,16 +757,14 @@ mod tests {
 
     #[tokio::test]
     async fn admin_page_renders_pet_stats() {
-        let state = setup_test_state().await;
-        let db = state.app_state.db.clone();
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        let (state, app) = get_test_app().await;
 
         let pet = pets::ActiveModel {
             name: Set("fox".to_string()),
             enabled: Set(true),
             ..Default::default()
         }
-        .insert(db.as_ref())
+        .insert(state.db.as_ref())
         .await
         .expect("insert pet");
         let today = Utc::now().date_naive();
@@ -708,7 +774,7 @@ mod tests {
             vote_count: Set(4),
             ..Default::default()
         }
-        .insert(db.as_ref())
+        .insert(state.db.as_ref())
         .await
         .expect("insert votes");
 
@@ -726,8 +792,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_redirects_non_base_domain() {
-        let state = setup_test_state().await;
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        let (_state, app) = get_test_app().await;
 
         let request = Request::builder()
             .method("GET")
@@ -750,16 +815,14 @@ mod tests {
 
     #[tokio::test]
     async fn homepage_lists_enabled_and_top_votes() {
-        let state = setup_test_state().await;
-        let db = state.app_state.db.clone();
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        let (state, app) = get_test_app().await;
 
         let dog = pets::ActiveModel {
             name: Set("dog".to_string()),
             enabled: Set(true),
             ..Default::default()
         }
-        .insert(db.as_ref())
+        .insert(state.db.as_ref())
         .await
         .expect("insert dog");
         let cat = pets::ActiveModel {
@@ -767,7 +830,7 @@ mod tests {
             enabled: Set(false),
             ..Default::default()
         }
-        .insert(db.as_ref())
+        .insert(state.db.as_ref())
         .await
         .expect("insert cat");
         let today = Utc::now().date_naive();
@@ -777,7 +840,7 @@ mod tests {
             vote_count: Set(5),
             ..Default::default()
         }
-        .insert(db.as_ref())
+        .insert(state.db.as_ref())
         .await
         .expect("insert cat votes");
         votes::ActiveModel {
@@ -786,7 +849,7 @@ mod tests {
             vote_count: Set(2),
             ..Default::default()
         }
-        .insert(db.as_ref())
+        .insert(state.db.as_ref())
         .await
         .expect("insert dog votes");
 
@@ -815,16 +878,13 @@ mod tests {
 
     #[tokio::test]
     async fn subdomain_root_lists_status_codes() {
-        let state = setup_test_state().await;
+        let (state, app) = get_test_app().await;
 
         state
-            .app_state
             .create_or_update_pet("dog", true)
             .await
             .expect("create pet");
-        let _image_path = state.app_state.write_test_image("dog", 404);
-
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        state.write_test_image("dog", 404);
 
         let request = Request::builder()
             .method("GET")
@@ -842,16 +902,13 @@ mod tests {
 
     #[tokio::test]
     async fn path_root_lists_status_codes() {
-        let state = setup_test_state().await;
+        let (state, app) = get_test_app().await;
 
         state
-            .app_state
             .create_or_update_pet("dog", true)
             .await
             .expect("create pet");
-        let _image_path = state.app_state.write_test_image("dog", 404);
-
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        state.write_test_image("dog", 404);
 
         let request = Request::builder()
             .method("GET")
@@ -870,16 +927,12 @@ mod tests {
 
     #[tokio::test]
     async fn path_status_returns_image() {
-        let state = setup_test_state().await;
+        let (state, app) = get_test_app().await;
         state
-            .app_state
             .create_or_update_pet("dog", true)
             .await
             .expect("create pet");
-
-        let _image_path = state.app_state.write_test_image("dog", 200);
-
-        let app: Router = create_router(&state.app_state).with_state(state.app_state.clone());
+        state.write_test_image("dog", 200);
 
         let request = Request::builder()
             .method("GET")
@@ -913,10 +966,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_update_toggles_enabled() {
-        let state = setup_test_state().await;
-        let db = state.app_state.db.clone();
-        let enabled_list = state.app_state.enabled_pets.clone();
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        let (state, app) = get_test_app().await;
 
         let request = Request::builder()
             .method("POST")
@@ -930,21 +980,19 @@ mod tests {
 
         let pet = pets::Entity::find()
             .filter(pets::Column::Name.eq("otter"))
-            .one(db.as_ref())
+            .one(state.db.as_ref())
             .await
             .expect("fetch pet")
             .expect("pet exists");
         assert!(pet.enabled);
 
-        let enabled = enabled_list.read().await;
+        let enabled = state.enabled_pets.read().await;
         assert!(enabled.contains(&"otter".to_string()));
     }
 
     #[tokio::test]
     async fn admin_create_pet_adds_dog() {
-        let state = setup_test_state().await;
-        let db = state.app_state.db.clone();
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        let (state, app) = get_test_app().await;
 
         let request = Request::builder()
             .method("POST")
@@ -958,7 +1006,7 @@ mod tests {
 
         let pet = pets::Entity::find()
             .filter(pets::Column::Name.eq("dog"))
-            .one(db.as_ref())
+            .one(state.db.as_ref())
             .await
             .expect("fetch pet")
             .expect("pet exists");
@@ -967,14 +1015,22 @@ mod tests {
 
     #[tokio::test]
     async fn admin_upload_saves_jpeg() {
-        let state = setup_test_state().await;
+        let (state, app) = get_test_app().await;
         state
-            .app_state
             .create_or_update_pet("dog", true)
             .await
             .expect("create pet");
 
-        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let (body, cookie) = read_body_and_cookie(response).await;
+        let csrf_token = extract_csrf_token(&body);
+        let cookie = cookie.expect("missing session cookie");
 
         let boundary = "boundary123";
         let body = multipart_body(
@@ -982,6 +1038,7 @@ mod tests {
             vec![
                 ("pet", b"dog".to_vec(), None),
                 ("status_code", b"201".to_vec(), None),
+                ("csrf_token", csrf_token.into_bytes(), None),
                 ("image", vec![0xFF, 0xD8, 0xFF, 0xD9], Some("dog.jpg")),
             ],
         );
@@ -990,6 +1047,7 @@ mod tests {
             .method("POST")
             .uri("/admin/images")
             .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
             .header(
                 CONTENT_TYPE,
                 format!("multipart/form-data; boundary={boundary}"),
@@ -999,7 +1057,7 @@ mod tests {
         let response = app.oneshot(request).await.expect("send request");
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
 
-        let image_path = state.app_state.image_dir.join("dog/201.jpg");
+        let image_path = state.image_dir.join("dog/201.jpg");
         let metadata = tokio::fs::metadata(&image_path)
             .await
             .expect("uploaded file metadata");

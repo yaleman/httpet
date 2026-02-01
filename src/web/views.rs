@@ -1,4 +1,5 @@
 use super::prelude::*;
+use super::csrf;
 use crate::{
     db::entities::{pets, votes},
     status_codes,
@@ -10,6 +11,7 @@ use axum::response::Response;
 #[template(path = "vote_page.html")]
 pub(crate) struct VotePageTemplate {
     pub(crate) name: String,
+    pub(crate) csrf_token: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -37,6 +39,7 @@ pub(crate) struct HomeTemplate {
     pub(crate) enabled_pets: Vec<db::entities::pets::Model>,
     pub(crate) top_pets: Vec<TopPet>,
     pub(crate) state: AppState,
+    pub(crate) csrf_token: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -94,6 +97,7 @@ pub(crate) async fn pet_status_list(
 pub(crate) async fn root_handler(
     domain: AnimalDomain,
     State(state): State<AppState>,
+    session: Session,
 ) -> Result<Response, HttpetError> {
     // if it's a subdomain then handle that.
     if let Some(animal) = domain.animal.as_deref() {
@@ -135,10 +139,12 @@ pub(crate) async fn root_handler(
         let votes: i64 = row.try_get("", "total_votes")?;
         top_pets.push(TopPet { name, votes });
     }
+    let csrf_token = csrf::csrf_token(&session).await?;
     Ok(HomeTemplate {
         enabled_pets,
         top_pets,
         state: state.clone(),
+        csrf_token,
     }
     .into_response())
 }

@@ -11,6 +11,7 @@
       <h1>Help bring {{ name }} to httpet</h1>
       <p>This pet is not enabled yet. Vote to prioritize adding it to the lineup.</p>
       <form method="post" action="/vote/{{ name }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit">Vote for {{ name }}</button>
       </form>
     </main>
