@@ -1062,6 +1062,7 @@ dependencies = [
  "sea-orm",
  "sea-orm-migration",
  "serde",
+ "serde_json",
  "simple_logger",
  "tempfile",
  "tokio",

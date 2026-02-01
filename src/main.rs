@@ -31,6 +31,11 @@ async fn main() -> Result<ExitCode, Box<std::io::Error>> {
 
     setup_logging(cli.debug)?;
 
+    if let Err(err) = httpet::status_codes::init() {
+        error!("Status code metadata error: {}", err);
+        return Err(Box::new(std::io::Error::other(err)));
+    }
+
     let db = match httpet::db::connect_db(
         cli.database_path.as_deref().unwrap_or("./db/httpet.sqlite"),
         cli.debug,

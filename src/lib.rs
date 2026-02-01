@@ -22,4 +22,6 @@ pub mod config;
 pub mod constants;
 pub mod db;
 pub mod error;
+/// HTTP status code metadata generated at build time.
+pub mod status_codes;
 pub mod web;
