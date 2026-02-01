@@ -57,7 +57,7 @@ impl AppState {
 
     pub fn base_url(&self) -> String {
         if let Some(url) = self.frontend_url.as_ref() {
-            url.to_string()
+            url.to_string().trim_end_matches('/').to_string()
         } else if self.listen_port == 443 {
             format!("https://{}", self.base_domain)
         } else if self.listen_port == 80 {
@@ -73,7 +73,7 @@ impl AppState {
             if let Err(err) = pet_url.set_host(Some(&format!("{}.{}", pet, self.base_domain))) {
                 error!(error=?err, pet=%pet, "Failed to set pet host on URL {}", url);
             }
-            pet_url.to_string()
+            pet_url.to_string().trim_end_matches('/').to_string()
         } else if self.listen_port == 443 {
             format!("https://{}.{}", pet, self.base_domain)
         } else if self.listen_port == 80 {
@@ -281,7 +281,7 @@ fn create_router(state: &AppState) -> Router<AppState> {
     Router::new()
         .merge(admin_routes)
         .route("/", axum::routing::get(views::root_handler))
-        .route("/{status_code}", axum::routing::get(get_status_handler))
+        .route("/{status_code:int}", axum::routing::get(get_status_handler))
         .route("/vote", axum::routing::post(vote_form_handler))
         .route(
             "/vote/{name}",
