@@ -147,87 +147,76 @@ async fn get_status_handler(
     State(state): State<AppState>,
     Path(status_code): Path<u16>,
 ) -> Result<axum::response::Response, HttpetError> {
-    let mut builder = axum::response::Response::builder();
     if let Some(animal) = domain.animal.as_deref() {
-        let enabled = state
-            .enabled_pets
-            .read()
-            .await
-            .contains(&animal.to_string());
-        if !enabled {
-            return Err(HttpetError::NeedsVote(state.base_url(), animal.to_string()));
-        }
-        let image_path = state.image_path(animal, status_code);
-        match tokio::fs::read(&image_path).await {
-            Ok(bytes) => {
-                if let Ok(value) = HeaderValue::from_str(animal) {
-                    builder = builder.header(X_HTTPET_ANIMAL, value);
-                }
-                builder = builder.header(CONTENT_TYPE, "image/jpeg");
-                builder
-                    .body(axum::body::Body::from(bytes))
-                    .map_err(HttpetError::from)
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(HttpetError::NotFound),
-            Err(err) => {
-                error!(
-                    "Failed to read image file {}: {}",
-                    image_path.display(),
-                    err
-                );
-                Err(HttpetError::InternalServerError(err.to_string()))
-            }
-        }
-    } else {
-        // return a random animal image for the root domain
-        let enabled = state.enabled_pets.read().await.clone();
-        if enabled.is_empty() {
-            return Err(HttpetError::NotFound);
-        }
-        let mut candidates = Vec::new();
-        for animal in enabled {
-            let image_path = state.image_path(&animal, status_code);
-            match tokio::fs::metadata(&image_path).await {
-                Ok(_) => candidates.push(animal),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    error!(
-                        "Failed to read image metadata for {}: {}",
-                        image_path.display(),
-                        err
-                    );
-                    return Err(HttpetError::InternalServerError(err.to_string()));
-                }
-            }
-        }
+        return pet_status_response(&state, animal, status_code).await;
+    }
 
-        let animal = {
-            let mut rng = rand::rng();
-            match candidates.choose(&mut rng) {
-                Some(animal) => animal.to_string(),
-                None => return Err(HttpetError::NotFound),
-            }
-        };
+    // return a random animal image for the root domain
+    let enabled = state.enabled_pets.read().await.clone();
+    if enabled.is_empty() {
+        return Err(HttpetError::NotFound);
+    }
+    let mut candidates = Vec::new();
+    for animal in enabled {
         let image_path = state.image_path(&animal, status_code);
-        match tokio::fs::read(&image_path).await {
-            Ok(bytes) => {
-                if let Ok(value) = HeaderValue::from_str(&animal) {
-                    builder = builder.header(X_HTTPET_ANIMAL, value);
-                }
-                builder = builder.header(CONTENT_TYPE, "image/jpeg");
-                builder
-                    .body(axum::body::Body::from(bytes))
-                    .map_err(HttpetError::from)
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(HttpetError::NotFound),
+        match tokio::fs::metadata(&image_path).await {
+            Ok(_) => candidates.push(animal),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
                 error!(
-                    "Failed to read image file {}: {}",
+                    "Failed to read image metadata for {}: {}",
                     image_path.display(),
                     err
                 );
-                Err(HttpetError::InternalServerError(err.to_string()))
+                return Err(HttpetError::InternalServerError(err.to_string()));
             }
+        }
+    }
+
+    let animal = {
+        let mut rng = rand::rng();
+        match candidates.choose(&mut rng) {
+            Some(animal) => animal.to_string(),
+            None => return Err(HttpetError::NotFound),
+        }
+    };
+
+    pet_status_response(&state, &animal, status_code).await
+}
+
+async fn pet_status_response(
+    state: &AppState,
+    animal: &str,
+    status_code: u16,
+) -> Result<axum::response::Response, HttpetError> {
+    let enabled = state
+        .enabled_pets
+        .read()
+        .await
+        .contains(&animal.to_string());
+    if !enabled {
+        return Err(HttpetError::NeedsVote(state.base_url(), animal.to_string()));
+    }
+    let image_path = state.image_path(animal, status_code);
+    let mut builder = axum::response::Response::builder();
+    match tokio::fs::read(&image_path).await {
+        Ok(bytes) => {
+            if let Ok(value) = HeaderValue::from_str(animal) {
+                builder = builder.header(X_HTTPET_ANIMAL, value);
+            }
+            builder = builder.header(CONTENT_TYPE, "image/jpeg");
+            builder
+                .body(axum::body::Body::from(bytes))
+                .map_err(HttpetError::from)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(HttpetError::NotFound),
+        Err(err) => {
+            error!(
+                "Failed to read image file {}: {}",
+                image_path.display(),
+                err
+            );
+            Err(HttpetError::InternalServerError(err.to_string()))
         }
     }
 }
@@ -268,6 +257,33 @@ async fn vote_form_handler(
     Ok(VoteThanksTemplate { name })
 }
 
+async fn pet_or_status_handler(
+    domain: AnimalDomain,
+    State(state): State<AppState>,
+    Path(segment): Path<String>,
+) -> Result<axum::response::Response, HttpetError> {
+    if let Ok(status_code) = segment.parse::<u16>() {
+        return get_status_handler(domain, State(state), Path(status_code)).await;
+    }
+
+    let pet = normalize_pet_name(&segment);
+    views::pet_status_list(state, &pet).await
+}
+
+#[derive(Deserialize)]
+struct PetStatusPath {
+    pet: String,
+    status_code: u16,
+}
+
+async fn pet_status_handler(
+    State(state): State<AppState>,
+    Path(path): Path<PetStatusPath>,
+) -> Result<axum::response::Response, HttpetError> {
+    let pet = normalize_pet_name(&path.pet);
+    pet_status_response(&state, &pet, path.status_code).await
+}
+
 fn create_router(state: &AppState) -> Router<AppState> {
     let static_service = ServeDir::new("./static").append_index_html_on_directories(false);
     let admin_routes = Router::new()
@@ -284,7 +300,9 @@ fn create_router(state: &AppState) -> Router<AppState> {
     Router::new()
         .merge(admin_routes)
         .route("/", axum::routing::get(views::root_handler))
-        .route("/{status_code:int}", axum::routing::get(get_status_handler))
+        .route("/{pet}/{status_code}", axum::routing::get(pet_status_handler))
+        .route("/{segment}/", axum::routing::get(pet_or_status_handler))
+        .route("/{segment}", axum::routing::get(pet_or_status_handler))
         .route("/vote", axum::routing::post(vote_form_handler))
         .route(
             "/vote/{name}",
@@ -773,6 +791,75 @@ mod tests {
         let body = read_body(response).await;
         assert!(body.contains("Part of the"));
         assert!(body.contains("404"));
+    }
+
+    #[tokio::test]
+    async fn path_root_lists_status_codes() {
+        let state = setup_test_state().await;
+
+        state
+            .app_state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+        let _image_path = state.app_state.write_test_image("dog", 404);
+
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/dog/")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        let body = read_body(response).await;
+        assert!(body.contains("Part of the"));
+        assert!(body.contains("MDN reference"));
+        assert!(body.contains("404"));
+    }
+
+    #[tokio::test]
+    async fn path_status_returns_image() {
+        let state = setup_test_state().await;
+        state
+            .app_state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+
+        let _image_path = state.app_state.write_test_image("dog", 200);
+
+        let app: Router = create_router(&state.app_state).with_state(state.app_state.clone());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/dog/200")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+
+        assert_eq!(
+            response.status(),
+            StatusCode::from_u16(200).expect("invalid status code")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(X_HTTPET_ANIMAL)
+                .expect("missing header"),
+            "dog"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .expect("missing header"),
+            "image/jpeg"
+        );
+        let body = read_body(response).await;
+        assert!(!body.is_empty());
     }
 
     #[tokio::test]

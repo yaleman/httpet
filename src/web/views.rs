@@ -48,6 +48,45 @@ pub(crate) struct StatusListTemplate {
     state: AppState,
 }
 
+pub(crate) async fn pet_status_list(
+    state: AppState,
+    pet: &str,
+) -> Result<Response, HttpetError> {
+    let enabled = state
+        .enabled_pets
+        .read()
+        .await
+        .contains(&pet.to_string());
+    if !enabled {
+        return Err(HttpetError::NeedsVote(state.base_url(), pet.to_string()));
+    }
+
+    let status_codes = status_codes_for(&state.image_dir, pet).await?;
+    let status_map = status_codes::status_codes()
+        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+    let mut status_entries = Vec::with_capacity(status_codes.len());
+    for code in status_codes {
+        let Some(info) = status_map.get(&code) else {
+            return Err(HttpetError::InternalServerError(format!(
+                "Missing metadata for status code {code}"
+            )));
+        };
+        status_entries.push(StatusCodeEntry {
+            code,
+            summary: info.summary.clone(),
+            mdn_url: info.mdn_url.clone(),
+        });
+    }
+
+    Ok(StatusListTemplate {
+        name: pet.to_string(),
+        status_codes: status_entries,
+        base_domain: state.base_domain.clone(),
+        state,
+    }
+    .into_response())
+}
+
 /// handles the / GET
 pub(crate) async fn root_handler(
     domain: AnimalDomain,
@@ -55,38 +94,7 @@ pub(crate) async fn root_handler(
 ) -> Result<Response, HttpetError> {
     // if it's a subdomain then handle that.
     if let Some(animal) = domain.animal.as_deref() {
-        let enabled = state
-            .enabled_pets
-            .read()
-            .await
-            .contains(&animal.to_string());
-        if !enabled {
-            return Err(HttpetError::NeedsVote(state.base_url(), animal.to_string()));
-        }
-        let status_codes = status_codes_for(&state.image_dir, animal).await?;
-        let status_map = status_codes::status_codes()
-            .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
-        let mut status_entries = Vec::with_capacity(status_codes.len());
-        for code in status_codes {
-            let Some(info) = status_map.get(&code) else {
-                return Err(HttpetError::InternalServerError(format!(
-                    "Missing metadata for status code {code}"
-                )));
-            };
-            status_entries.push(StatusCodeEntry {
-                code,
-                summary: info.summary.clone(),
-                mdn_url: info.mdn_url.clone(),
-            });
-        }
-
-        return Ok(StatusListTemplate {
-            name: animal.to_string(),
-            status_codes: status_entries,
-            base_domain: state.base_domain.clone(),
-            state,
-        }
-        .into_response());
+        return pet_status_list(state, animal).await;
     }
 
     let db = &state.db;
