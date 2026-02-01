@@ -9,6 +9,7 @@ use axum::Router;
 use rand::prelude::IndexedRandom;
 use sea_orm::{DatabaseTransaction, IntoActiveModel, TransactionTrait};
 use serde::Deserialize;
+use serde_json::json;
 use tokio::sync::RwLock;
 use tower_http::services::ServeDir;
 
@@ -154,7 +155,10 @@ async fn get_status_handler(
     // return a random animal image for the root domain
     let enabled = state.enabled_pets.read().await.clone();
     if enabled.is_empty() {
-        return Err(HttpetError::NotFound);
+        return Err(HttpetError::NotFound(format!(
+            "{}",
+            json!({"domain" : domain, "status_code": status_code})
+        )));
     }
     let mut candidates = Vec::new();
     for animal in enabled {
@@ -177,7 +181,12 @@ async fn get_status_handler(
         let mut rng = rand::rng();
         match candidates.choose(&mut rng) {
             Some(animal) => animal.to_string(),
-            None => return Err(HttpetError::NotFound),
+            None => {
+                return Err(HttpetError::NotFound(format!(
+                    "{}",
+                    json!({"domain" : domain, "status_code": status_code})
+                )));
+            }
         }
     };
 
@@ -209,14 +218,18 @@ async fn pet_status_response(
                 .body(axum::body::Body::from(bytes))
                 .map_err(HttpetError::from)
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(HttpetError::NotFound),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(HttpetError::NotFound(
+            format!("{}", json!({"animal": animal, "status_code": status_code})),
+        )),
         Err(err) => {
             error!(
                 "Failed to read image file {}: {}",
                 image_path.display(),
                 err
             );
-            Err(HttpetError::InternalServerError(err.to_string()))
+            Err(HttpetError::InternalServerError(
+                "Failed to access image, contact an admin!".to_string(),
+            ))
         }
     }
 }
@@ -267,7 +280,8 @@ async fn pet_or_status_handler(
     }
 
     let pet = normalize_pet_name(&segment);
-    views::pet_status_list(state, &pet).await
+    let link_prefix = format!("/{}", pet);
+    views::pet_status_list(state, &pet, &link_prefix).await
 }
 
 #[derive(Deserialize)]
@@ -300,14 +314,17 @@ fn create_router(state: &AppState) -> Router<AppState> {
     Router::new()
         .merge(admin_routes)
         .route("/", axum::routing::get(views::root_handler))
-        .route("/{pet}/{status_code}", axum::routing::get(pet_status_handler))
-        .route("/{segment}/", axum::routing::get(pet_or_status_handler))
-        .route("/{segment}", axum::routing::get(pet_or_status_handler))
         .route("/vote", axum::routing::post(vote_form_handler))
         .route(
             "/vote/{name}",
             axum::routing::post(vote_pet_handler).get(vote_pet_view),
         )
+        .route(
+            "/{pet}/{status_code}",
+            axum::routing::get(pet_status_handler),
+        )
+        .route("/{segment}/", axum::routing::get(pet_or_status_handler))
+        .route("/{segment}", axum::routing::get(pet_or_status_handler))
         .nest_service("/static", axum::routing::get_service(static_service))
 }
 
@@ -791,6 +808,8 @@ mod tests {
         let body = read_body(response).await;
         assert!(body.contains("Part of the"));
         assert!(body.contains("404"));
+        assert!(body.contains("href=\"/404\""));
+        assert!(!body.contains("href=\"/dog/404\""));
     }
 
     #[tokio::test]
@@ -815,8 +834,10 @@ mod tests {
         let response = app.oneshot(request).await.expect("send request");
         let body = read_body(response).await;
         assert!(body.contains("Part of the"));
-        assert!(body.contains("MDN reference"));
+        assert!(body.contains("MDN"));
         assert!(body.contains("404"));
+        assert!(body.contains("href=\"/dog/404\""));
+        assert!(!body.contains("href=\"/404\""));
     }
 
     #[tokio::test]

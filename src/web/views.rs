@@ -45,12 +45,14 @@ pub(crate) struct StatusListTemplate {
     pub(crate) name: String,
     pub(crate) status_codes: Vec<StatusCodeEntry>,
     pub(crate) base_domain: String,
+    pub(crate) status_link_prefix: String,
     state: AppState,
 }
 
 pub(crate) async fn pet_status_list(
     state: AppState,
     pet: &str,
+    status_link_prefix: &str,
 ) -> Result<Response, HttpetError> {
     let enabled = state
         .enabled_pets
@@ -82,6 +84,7 @@ pub(crate) async fn pet_status_list(
         name: pet.to_string(),
         status_codes: status_entries,
         base_domain: state.base_domain.clone(),
+        status_link_prefix: status_link_prefix.to_string(),
         state,
     }
     .into_response())
@@ -94,7 +97,7 @@ pub(crate) async fn root_handler(
 ) -> Result<Response, HttpetError> {
     // if it's a subdomain then handle that.
     if let Some(animal) = domain.animal.as_deref() {
-        return pet_status_list(state, animal).await;
+        return pet_status_list(state, animal, "").await;
     }
 
     let db = &state.db;

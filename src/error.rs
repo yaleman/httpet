@@ -11,7 +11,7 @@ pub enum HttpetError {
     /// When DB operations fail
     DatabaseError(sea_orm::DbErr),
     /// When a requested resource is not found
-    NotFound,
+    NotFound(String),
     /// When an internal server error occurs
     InternalServerError(String),
 
@@ -57,8 +57,8 @@ impl IntoResponse for HttpetError {
                 *response.status_mut() = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
                 response
             }
-            HttpetError::NotFound => {
-                tracing::error!("Not found error");
+            HttpetError::NotFound(url) => {
+                tracing::error!("404 {url}");
                 let mut response =
                     axum::response::Response::new(axum::body::Body::from("Not Found"));
                 *response.status_mut() = axum::http::StatusCode::NOT_FOUND;

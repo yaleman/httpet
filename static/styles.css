@@ -80,6 +80,7 @@ p {
 	display: grid;
 	gap: 16px;
 	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	align-items: start;
 }
 
 ul.pet-list {
@@ -119,12 +120,6 @@ ul.pet-list li.pet {
 	gap: 12px;
 }
 
-.status-card .pill {
-	min-width: 0;
-	font-size: 1.2rem;
-	padding: 0.5rem 0.9rem;
-}
-
 .status-summary {
 	font-size: 1rem;
 	color: #475569;
@@ -132,7 +127,7 @@ ul.pet-list li.pet {
 
 .status-link {
 	font-size: 0.95rem;
-	color: #2563eb;
+	color: var(--primary-color);
 	text-decoration: none;
 }
 

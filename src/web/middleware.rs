@@ -5,11 +5,12 @@ use axum::http::header::HOST;
 use axum::http::request::Parts;
 use axum::middleware::Next;
 use axum::response::{Redirect, Response};
+use serde::Serialize;
 
 use super::prelude::*;
 use super::{AppState, normalize_pet_name};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct AnimalDomain {
     pub(crate) animal: Option<String>,
 }

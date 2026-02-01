@@ -21,11 +21,10 @@
           {% for status in status_codes %}
           <div class="status-card">
             <div class="status-code">
-              <strong>{{ status.code }}</strong>
-              <a class="pill" href="/{{ status.code }}">/{{ status.code }}</a>
+              <a href="{{ status_link_prefix }}/{{ status.code }}"><strong>{{ status.code }}</strong></a>
             </div>
             <p class="status-summary">{{ status.summary }}</p>
-            <a class="status-link" href="{{ status.mdn_url }}">MDN reference</a>
+            <a class="status-link" href="{{ status.mdn_url }}">[MDN]</a>
           </div>
           {% endfor %}
         </div>
