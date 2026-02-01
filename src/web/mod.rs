@@ -290,6 +290,7 @@ async fn vote_form_handler(
     Ok(VoteThanksTemplate { name })
 }
 
+/// is it a pet, or is it a status code? who knows.
 async fn pet_or_status_handler(
     domain: AnimalDomain,
     State(state): State<AppState>,
@@ -335,6 +336,7 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
     let url = Url::from_str(&state.base_url())?;
 
     let secure_cookies = state.listen_port == 443 || url.scheme() == "https";
+    info!("Using secure cookies: {}", secure_cookies);
     let session_layer = SessionManagerLayer::new(MemoryStore::default())
         .with_expiry(Expiry::OnInactivity(Duration::seconds(60)))
         .with_secure(secure_cookies)
