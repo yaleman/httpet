@@ -4,6 +4,8 @@ description = "Code for httpet.org"
 version = "0.0.1"
 edition = "2024"
 
+default-run = "httpet"
+
 [dependencies]
 anyhow = "1.0.100"
 askama = "0.15.4"
