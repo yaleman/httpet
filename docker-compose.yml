@@ -6,6 +6,7 @@ services:
       - "4200:9000"
     environment:
       - HTTPET_DATABASE_PATH=/db/httpet.sqlite
+      - HTTPET_BASE_DOMAIN=httpet.org
     volumes:
       - type: bind
         source: ./images
