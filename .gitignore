@@ -2,3 +2,4 @@
 httpet.sqlite
 tarpaulin-report.html
 ./db/
+.DS_Store
