@@ -1,7 +1,7 @@
 services:
   httpet:
     image: ghcr.io/yaleman/httpet:latest
-    build: .
+    pull_policy: always
     ports:
       - "4200:9000"
     environment:
