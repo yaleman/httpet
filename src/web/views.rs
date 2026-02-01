@@ -1,6 +1,7 @@
 use super::prelude::*;
 use crate::{
     db::entities::{pets, votes},
+    status_codes,
     web::{middleware::AnimalDomain, status_codes_for},
 };
 use axum::response::Response;
@@ -23,6 +24,13 @@ pub(crate) struct TopPet {
     pub(crate) votes: i64,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct StatusCodeEntry {
+    pub(crate) code: u16,
+    pub(crate) summary: String,
+    pub(crate) mdn_url: String,
+}
+
 #[derive(Template, WebTemplate)]
 #[template(path = "home.html")]
 pub(crate) struct HomeTemplate {
@@ -35,7 +43,7 @@ pub(crate) struct HomeTemplate {
 #[template(path = "status_list.html")]
 pub(crate) struct StatusListTemplate {
     pub(crate) name: String,
-    pub(crate) status_codes: Vec<u16>,
+    pub(crate) status_codes: Vec<StatusCodeEntry>,
     pub(crate) base_domain: String,
     state: AppState,
 }
@@ -56,10 +64,25 @@ pub(crate) async fn root_handler(
             return Err(HttpetError::NeedsVote(state.base_url(), animal.to_string()));
         }
         let status_codes = status_codes_for(&state.image_dir, animal).await?;
+        let status_map = status_codes::status_codes()
+            .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+        let mut status_entries = Vec::with_capacity(status_codes.len());
+        for code in status_codes {
+            let Some(info) = status_map.get(&code) else {
+                return Err(HttpetError::InternalServerError(format!(
+                    "Missing metadata for status code {code}"
+                )));
+            };
+            status_entries.push(StatusCodeEntry {
+                code,
+                summary: info.summary.clone(),
+                mdn_url: info.mdn_url.clone(),
+            });
+        }
 
         return Ok(StatusListTemplate {
             name: animal.to_string(),
-            status_codes,
+            status_codes: status_entries,
             base_domain: state.base_domain.clone(),
             state,
         }

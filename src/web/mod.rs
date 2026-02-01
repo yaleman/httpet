@@ -383,6 +383,7 @@ mod tests {
 
     async fn setup_test_state() -> TestState {
         let _ = setup_logging(true);
+        crate::status_codes::init().expect("load status code metadata");
         let db = crate::db::connect_test_db().await.expect("connect test db");
         crate::db::migrations::Migrator::up(db.as_ref(), None)
             .await

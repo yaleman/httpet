@@ -108,6 +108,38 @@ ul.pet-list li.pet {
 	font-size: 2rem;
 }
 
+.status-card {
+	display: grid;
+	gap: 8px;
+}
+
+.status-code {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.status-card .pill {
+	min-width: 0;
+	font-size: 1.2rem;
+	padding: 0.5rem 0.9rem;
+}
+
+.status-summary {
+	font-size: 1rem;
+	color: #475569;
+}
+
+.status-link {
+	font-size: 0.95rem;
+	color: #2563eb;
+	text-decoration: none;
+}
+
+.status-link:hover {
+	text-decoration: underline;
+}
+
 .pet-header {
 	display: flex;
 	align-items: center;

@@ -18,10 +18,14 @@
         <p>No status images found yet.</p>
         {% else %}
         <div class="grid">
-          {% for code in status_codes %}
-          <div class="pet">
-            <strong>{{ code }}</strong>
-            <a class="pill" href="/{{ code }}">/{{ code }}</a>
+          {% for status in status_codes %}
+          <div class="status-card">
+            <div class="status-code">
+              <strong>{{ status.code }}</strong>
+              <a class="pill" href="/{{ status.code }}">/{{ status.code }}</a>
+            </div>
+            <p class="status-summary">{{ status.summary }}</p>
+            <a class="status-link" href="{{ status.mdn_url }}">MDN reference</a>
           </div>
           {% endfor %}
         </div>
