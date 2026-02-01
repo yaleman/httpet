@@ -1,6 +1,7 @@
 services:
   httpet:
     image: ghcr.io/yaleman/httpet:latest
+    build: .
     ports:
       - "4200:9000"
     environment:
