@@ -82,6 +82,7 @@ pub(crate) async fn root_handler(
             Expr::col((pets::Entity, pets::Column::Id))
                 .equals((votes::Entity, votes::Column::PetId)),
         )
+        .and_where(Expr::col((pets::Entity, pets::Column::Enabled)).eq(false))
         .and_where(Expr::col((votes::Entity, votes::Column::VoteDate)).gte(start_date))
         .and_where(Expr::col((votes::Entity, votes::Column::VoteDate)).lte(today))
         .group_by_col((pets::Entity, pets::Column::Id))

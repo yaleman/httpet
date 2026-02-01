@@ -735,7 +735,15 @@ mod tests {
         assert!(body.contains("Available pets"));
         assert!(body.contains(&format!("dog.{}", TEST_BASE_DOMAIN)));
         assert!(body.contains("Top votes"));
-        assert!(body.contains("cat"));
+        let top_votes_section = body
+            .split("Top votes (last 7 days)")
+            .nth(1)
+            .expect("missing top votes section")
+            .split("Vote for a pet")
+            .next()
+            .expect("missing vote section");
+        assert!(top_votes_section.contains("cat"));
+        assert!(!top_votes_section.contains("dog"));
     }
 
     #[tokio::test]
