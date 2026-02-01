@@ -9,11 +9,11 @@
   <body>
     <header>
       <h1>{{ name }}.{{ base_domain }}</h1>
-      <p>Available status codes for {{ name }}.</p>
+      <p>Part of the {{ base.domain }} network.</p>
     </header>
     <main>
       <section class="card">
-        <h2>Available status codes</h2>
+        <h2>Available images</h2>
         {% if status_codes.len() == 0 %}
         <p>No status images found yet.</p>
         {% else %}
