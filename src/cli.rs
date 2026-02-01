@@ -1,6 +1,7 @@
 //! CLI parser
 use clap::Parser;
 use std::num::NonZeroU16;
+use url::Url;
 
 #[derive(Parser, Debug)]
 /// CLI Options
@@ -25,6 +26,11 @@ pub struct CliOptions {
     /// Base domain, defaults to localhost, needs to be httpet.org in prod.
     /// Env: HTTPET_BASE_DOMAIN
     pub base_domain: String,
+
+    #[clap(long, env = "HTTPET_FRONTEND_URL")]
+    /// Frontend URL, eg `https://httpet.org`. Env: HTTPET_FRONTEND_URL
+    /// If not set, will be constructed from listen address and port.
+    pub frontend_url: Option<Url>,
 
     #[clap(long, short, env = "HTTPET_DATABASE_PATH")]
     /// Path to the database file, eg `/data/httpet.sqlite`.

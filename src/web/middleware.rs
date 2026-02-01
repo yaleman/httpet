@@ -1,6 +1,10 @@
 use axum::extract::FromRequestParts;
 use axum::http::header::HOST;
 use axum::http::request::Parts;
+use axum::body::Body;
+use axum::http::Request;
+use axum::middleware::Next;
+use axum::response::{Redirect, Response};
 
 use super::prelude::*;
 use super::{AppState, normalize_pet_name};
@@ -59,4 +63,33 @@ impl FromRequestParts<AppState> for AnimalDomain {
             Ok(Self::from_host(&state.base_domain, &host))
         }
     }
+}
+
+pub(crate) async fn admin_base_domain_only(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let host = request
+        .headers()
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let host = normalize_host(host);
+
+    if host == state.base_domain {
+        return next.run(request).await;
+    }
+
+    let uri = request.uri().to_string();
+    let target = format!("{}{}", state.base_url(), uri);
+    Redirect::to(&target).into_response()
+}
+
+fn normalize_host(host: &str) -> String {
+    host.split(':')
+        .next()
+        .unwrap_or(host)
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
 }

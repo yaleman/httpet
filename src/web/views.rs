@@ -1,12 +1,9 @@
-use askama_web::WebTemplate;
-use axum::response::Response;
-
+use super::prelude::*;
 use crate::{
     db::entities::{pets, votes},
     web::{middleware::AnimalDomain, status_codes_for},
 };
-
-use super::prelude::*;
+use axum::response::Response;
 
 #[derive(Template, WebTemplate)]
 #[template(path = "vote_page.html")]

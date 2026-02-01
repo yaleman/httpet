@@ -1,14 +1,12 @@
 use super::prelude::*;
-use super::{AppState, normalize_pet_name};
 use crate::db::entities::{pets, votes};
-use askama::Template;
-use askama_web::WebTemplate;
 use axum::extract::{Form, Path, State};
 use axum::response::Redirect;
 use chrono::{Duration, NaiveDate, Utc};
+#[allow(unused_imports)]
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
-use serde::Deserialize;
 use std::collections::HashMap;
+use tracing::instrument;
 
 #[derive(Deserialize)]
 pub(crate) struct PetUpdateForm {
@@ -35,54 +33,49 @@ pub(crate) struct AdminTemplate {
     start_label: String,
     end_label: String,
     has_pets: bool,
-    base_domain: String,
+    state: AppState,
 }
 
 pub(crate) async fn admin_handler(
     State(state): State<AppState>,
 ) -> Result<AdminTemplate, HttpetError> {
-    let db = &state.db;
-    let pets_list = pets::Entity::find()
-        .order_by_asc(pets::Column::Name)
-        .all(db.as_ref())
-        .await?;
-
     let today = Utc::now().date_naive();
     let start_date = today - Duration::days(29);
-    let votes_list = votes::Entity::find()
-        .filter(votes::Column::VoteDate.between(start_date, today))
-        .order_by_asc(votes::Column::VoteDate)
-        .all(db.as_ref())
-        .await?;
 
-    let mut vote_map: HashMap<i32, HashMap<NaiveDate, i32>> = HashMap::new();
-    for vote in votes_list {
-        vote_map
-            .entry(vote.pet_id)
-            .or_default()
-            .insert(vote.vote_date, vote.vote_count);
-    }
+    let pet_db = pets::Entity::find()
+        .order_by_asc(pets::Column::Name)
+        .all(state.db.as_ref())
+        .await?;
 
     let date_labels: Vec<NaiveDate> = (0..30)
         .map(|offset| start_date + Duration::days(offset))
         .collect();
 
-    let pets = pets_list
-        .into_iter()
-        .map(|pet| {
-            let chart_svg = if pet.enabled {
-                String::new()
-            } else {
-                let vote_counts = build_vote_series(&date_labels, vote_map.get(&pet.id));
-                render_vote_chart(&vote_counts)
-            };
-            AdminPetView {
-                name: pet.name,
-                enabled: pet.enabled,
-                chart_svg,
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut pets: Vec<AdminPetView> = Vec::new();
+    let votes = votes::Entity::find()
+        .filter(votes::Column::VoteDate.gte(start_date))
+        .order_by_asc(votes::Column::VoteDate)
+        .all(state.db.as_ref())
+        .await?;
+
+    for pet in pet_db {
+        let chart_svg = if pet.enabled {
+            String::new()
+        } else {
+            let pet_votes = votes
+                .iter()
+                .filter(|v| v.pet_id == pet.id)
+                .map(|v| (v.vote_date, v.vote_count))
+                .collect();
+            let vote_counts = build_vote_series(&date_labels, Some(&pet_votes));
+            render_vote_chart(&pet.name, &vote_counts)
+        };
+        pets.push(AdminPetView {
+            name: pet.name,
+            enabled: pet.enabled,
+            chart_svg,
+        });
+    }
 
     let start_label = date_labels.first().map(format_date).unwrap_or_default();
     let end_label = date_labels.last().map(format_date).unwrap_or_default();
@@ -92,7 +85,7 @@ pub(crate) async fn admin_handler(
         pets,
         start_label,
         end_label,
-        base_domain: state.base_domain.clone(),
+        state,
     })
 }
 
@@ -108,6 +101,7 @@ pub(crate) async fn update_pet_handler(
     Ok(Redirect::to("/admin/"))
 }
 
+#[instrument(skip_all, fields(name = %form.name, enabled = ?form.enabled))]
 pub(crate) async fn create_pet_handler(
     State(state): State<AppState>,
     Form(form): Form<PetCreateForm>,
@@ -123,6 +117,7 @@ pub(crate) async fn create_pet_handler(
     Ok(Redirect::to("/admin/"))
 }
 
+/// zips the dates and votes into a series of vote counts
 fn build_vote_series(dates: &[NaiveDate], votes: Option<&HashMap<NaiveDate, i32>>) -> Vec<i32> {
     dates
         .iter()
@@ -130,7 +125,8 @@ fn build_vote_series(dates: &[NaiveDate], votes: Option<&HashMap<NaiveDate, i32>
         .collect()
 }
 
-fn render_vote_chart(counts: &[i32]) -> String {
+/// Turns the votes into an SVG chart
+fn render_vote_chart(pet_name: &str, counts: &[i32]) -> String {
     let width = 720.0;
     let height = 180.0;
     let padding = 18.0;
@@ -160,7 +156,7 @@ fn render_vote_chart(counts: &[i32]) -> String {
     );
 
     format!(
-        r##"<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" aria-label="Votes over time">
+        r##"<svg class="vote-chart" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" aria-label="Votes over time for {pet_name}">
   <defs>
     <linearGradient id="voteGradient" x1="0" x2="0" y1="0" y2="1">
       <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.35" />

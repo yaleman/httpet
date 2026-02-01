@@ -1,5 +1,10 @@
 //! DB storage for votes on pets
-use sea_orm::entity::prelude::*;
+use std::sync::Arc;
+
+use chrono::Utc;
+use sea_orm::{ActiveValue::Set, IntoActiveModel, TransactionTrait, entity::prelude::*};
+
+use crate::{error::HttpetError, web::normalize_pet_name};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "votes")]
@@ -35,3 +40,52 @@ impl Related<super::pets::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+pub(crate) async fn record_vote(
+    db: &Arc<DatabaseConnection>,
+    name: &str,
+) -> Result<(), HttpetError> {
+    let name = normalize_pet_name(name);
+    let db_txn = db.begin().await?;
+
+    let pet = super::pets::Entity::find_by_name(&db_txn, &name).await?;
+
+    let pet_id = match pet {
+        Some(model) => model.id,
+        None => {
+            let active = super::pets::ActiveModel {
+                name: Set(name.clone()),
+                enabled: Set(false),
+                ..Default::default()
+            };
+            active.insert(&db_txn).await?.id
+        }
+    };
+
+    let today = Utc::now().date_naive();
+
+    match Entity::find()
+        .filter(Column::PetId.eq(pet_id).and(Column::VoteDate.eq(today)))
+        .one(&db_txn)
+        .await?
+    {
+        Some(model) => {
+            let vote_count = model.vote_count + 1;
+            let mut am = model.into_active_model();
+            am.vote_count = Set(vote_count);
+            am.update(&db_txn).await?
+        }
+        None => {
+            let active = ActiveModel {
+                pet_id: Set(pet_id),
+                vote_date: Set(today),
+                vote_count: Set(1),
+                ..Default::default()
+            };
+            active.insert(&db_txn).await?
+        }
+    };
+    db_txn.commit().await?;
+
+    Ok(())
+}

@@ -1,4 +1,10 @@
+
+
 :root {
+	--base-text: black;
+	--primary-color: #681dd8d8;
+	--primary-text: white;
+	--secondary-color: #ab79e0;
 	color-scheme: light;
 }
 
@@ -6,17 +12,24 @@
 	box-sizing: border-box;
 }
 
-body {
-	margin: 0;
-	font-family: "DM Sans", system-ui, sans-serif;
-	background: #f6f7fb;
-	color: #1e1f24;
+
+a {
+	text-decoration: none;
+	color: var(--base-text);
+}
+a:visited {
+	color: var(--base-text);
 }
 
-header {
-	background: linear-gradient(135deg, #1d4ed8, #0ea5e9);
-	color: #fff;
-	padding: 32px 24px;
+a:hover {
+	color: var(--primary-color);
+}
+
+body {
+	margin: 0;
+	font-family: system-ui, sans-serif;
+	background: white;
+	color: var(--base-text);
 }
 
 main {
@@ -31,8 +44,20 @@ h1 {
 	margin: 0 0 8px 0;
 }
 
-header h1 a {
-	color: inherit;
+
+
+header {
+	background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+	color: var(--primary-text);
+	padding: 2rem 1.5rem;
+}
+
+header h1 a, header h1 a:visited {
+	color: var(--primary-text);
+	text-decoration: none;
+}
+header h1 a:hover {
+	color: var(--base-text);
 	text-decoration: none;
 }
 
@@ -45,7 +70,7 @@ p {
 }
 
 .card {
-	background: #fff;
+	background: white;
 	border-radius: 16px;
 	padding: 20px;
 	box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
@@ -136,8 +161,8 @@ button {
 	font-size: 1.5rem;
 	border-radius: 1rem;
 	padding: 0.5rem 1rem;
-	background: #1d4ed8;
-	color: #fff;
+	background: var(--primary-color);
+	color: var(--primary-text);
 	cursor: pointer;
 }
 
@@ -152,15 +177,6 @@ svg {
 	font-size: 12px;
 	color: #64748b;
 	margin-top: 6px;
-}
-
-.status {
-	display: inline-block;
-	padding: 6px 12px;
-	border-radius: 999px;
-	background: #fee2e2;
-	color: #991b1b;
-	font-size: 12px;
 }
 
 .top-list {
@@ -190,6 +206,10 @@ svg {
 	margin-top: 0;
 }
 
+.vote-chart {
+	width: 100%;
+}
+
 .thanks-page a {
-	color: #1d4ed8;
+	color: red;
 }

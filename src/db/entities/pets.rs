@@ -34,13 +34,19 @@ impl Related<super::votes::Entity> for Entity {
 impl ActiveModelBehavior for ActiveModel {}
 
 impl Entity {
-    /// List of enabled pet name
+    /// List of enabled pets (Models
     pub async fn enabled(db: &DatabaseConnection) -> Result<Vec<Model>, DbErr> {
+        Self::find().filter(Column::Enabled.eq(true)).all(db).await
+    }
+
+    /// List of enabled pet name
+    pub async fn enabled_names(db: &DatabaseConnection) -> Result<Vec<String>, DbErr> {
         Ok(Self::find()
             .filter(Column::Enabled.eq(true))
             .all(db)
             .await?
             .into_iter()
+            .map(|pet| pet.name)
             .collect())
     }
 

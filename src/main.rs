@@ -61,12 +61,9 @@ async fn main() -> Result<ExitCode, Box<std::io::Error>> {
         };
         tokio::select! {
             res =  httpet::web::setup_server(
-            &cli.listen_address,
-            cli.port.get(),
-            &cli.base_domain,
+            &cli,
             enabled_pets,
             db.clone(),
-            cli.port.get(),
         ) => {
             if let Err(err) = res {
                     error!("Server error: {}", err);

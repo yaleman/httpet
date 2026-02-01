@@ -33,8 +33,7 @@
         <section class="card">
           <div class="pet-header">
             <div>
-              <h2>{{ pet.name }}</h2>
-              <p>{{ pet.name }}.{{ base_domain }}</p>
+              <h2><a href="{{ state.pet_base_url(pet.name) }}">{{ pet.name }}</a></h2>
             </div>
             <span class="pill{% if pet.enabled %} enabled{% endif %}">{% if pet.enabled %}enabled{% else %}disabled{% endif %}</span>
           </div>

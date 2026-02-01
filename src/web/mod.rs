@@ -2,8 +2,9 @@
 
 use std::path::{Path as StdPath, PathBuf};
 
+use crate::cli::CliOptions;
 use crate::constants::{IMAGE_DIR, X_HTTPET_ANIMAL};
-use crate::db::entities::{pets, votes};
+use crate::db::entities::pets;
 use axum::Router;
 use rand::prelude::IndexedRandom;
 use sea_orm::{DatabaseTransaction, IntoActiveModel, TransactionTrait};
@@ -19,7 +20,8 @@ mod views;
 use prelude::*;
 
 use admin::{admin_handler, create_pet_handler, update_pet_handler};
-use middleware::AnimalDomain;
+use middleware::{AnimalDomain, admin_base_domain_only};
+use url::Url;
 use views::{VotePageTemplate, VoteThanksTemplate};
 
 #[derive(Clone, Debug)]
@@ -29,11 +31,13 @@ pub(crate) struct AppState {
     db: Arc<DatabaseConnection>,
     pub(crate) image_dir: PathBuf,
     listen_port: u16,
+    frontend_url: Option<Url>,
 }
 
 impl AppState {
     fn new(
         base_domain: &str,
+        frontend_url: Option<Url>,
         enabled_pets: Vec<String>,
         db: Arc<DatabaseConnection>,
         image_dir: PathBuf,
@@ -43,6 +47,7 @@ impl AppState {
 
         Self {
             base_domain,
+            frontend_url,
             enabled_pets: Arc::new(RwLock::new(enabled_pets)),
             db,
             image_dir,
@@ -51,7 +56,9 @@ impl AppState {
     }
 
     pub fn base_url(&self) -> String {
-        if self.listen_port == 443 {
+        if let Some(url) = self.frontend_url.as_ref() {
+            url.to_string()
+        } else if self.listen_port == 443 {
             format!("https://{}", self.base_domain)
         } else if self.listen_port == 80 {
             format!("http://{}", self.base_domain)
@@ -61,7 +68,13 @@ impl AppState {
     }
     /// Gets the base URL for a given pet
     pub fn pet_base_url(&self, pet: &str) -> String {
-        if self.listen_port == 443 {
+        if let Some(url) = self.frontend_url.as_ref() {
+            let mut pet_url = url.clone();
+            if let Err(err) = pet_url.set_host(Some(&format!("{}.{}", pet, self.base_domain))) {
+                error!(error=?err, pet=%pet, "Failed to set pet host on URL {}", url);
+            }
+            pet_url.to_string()
+        } else if self.listen_port == 443 {
             format!("https://{}.{}", pet, self.base_domain)
         } else if self.listen_port == 80 {
             format!("http://{}.{}", pet, self.base_domain)
@@ -229,13 +242,10 @@ async fn vote_pet_handler(
 async fn vote_pet_view(
     State(_appstate): State<AppState>,
     Path(name): Path<String>,
-) -> Result<Html<String>, StatusCode> {
-    let html = VotePageTemplate {
+) -> VotePageTemplate {
+    VotePageTemplate {
         name: normalize_pet_name(&name),
     }
-    .render()
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Html(html))
 }
 
 #[derive(Deserialize)]
@@ -255,67 +265,29 @@ async fn vote_form_handler(
     Ok(VoteThanksTemplate { name })
 }
 
-fn create_router() -> Router<AppState> {
+fn create_router(state: &AppState) -> Router<AppState> {
     let static_service = ServeDir::new("./static").append_index_html_on_directories(false);
-    Router::new()
-        .route("/", axum::routing::get(views::root_handler))
-        .route("/{status_code}", axum::routing::get(get_status_handler))
+    let admin_routes = Router::new()
         .route("/admin/", axum::routing::get(admin_handler))
         .route("/admin/pets", axum::routing::post(create_pet_handler))
         .route(
             "/admin/pets/{name}",
             axum::routing::post(update_pet_handler),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            admin_base_domain_only,
+        ));
+    Router::new()
+        .merge(admin_routes)
+        .route("/", axum::routing::get(views::root_handler))
+        .route("/{status_code}", axum::routing::get(get_status_handler))
         .route("/vote", axum::routing::post(vote_form_handler))
         .route(
             "/vote/{name}",
             axum::routing::post(vote_pet_handler).get(vote_pet_view),
         )
         .nest_service("/static", axum::routing::get_service(static_service))
-}
-
-async fn record_vote(db: &Arc<DatabaseConnection>, name: &str) -> Result<(), HttpetError> {
-    let name = normalize_pet_name(name);
-    let pet = pets::Entity::find()
-        .filter(pets::Column::Name.eq(&name))
-        .one(db.as_ref())
-        .await?;
-
-    let pet_id = match pet {
-        Some(model) => model.id,
-        None => {
-            let active = pets::ActiveModel {
-                name: Set(name.clone()),
-                enabled: Set(false),
-                ..Default::default()
-            };
-            active.insert(db.as_ref()).await?.id
-        }
-    };
-
-    let today = Utc::now().date_naive();
-    let insert = Query::insert()
-        .into_table(votes::Entity)
-        .columns([
-            votes::Column::PetId,
-            votes::Column::VoteDate,
-            votes::Column::VoteCount,
-        ])
-        .values_panic([pet_id.into(), today.into(), 1.into()])
-        .on_conflict(
-            OnConflict::columns([votes::Column::PetId, votes::Column::VoteDate])
-                .value(
-                    votes::Column::VoteCount,
-                    Expr::col(votes::Column::VoteCount).add(1),
-                )
-                .to_owned(),
-        )
-        .to_owned();
-
-    let stmt = StatementBuilder::build(&insert, &DatabaseBackend::Sqlite);
-    db.execute(stmt).await?;
-
-    Ok(())
 }
 
 pub(crate) fn normalize_pet_name(name: &str) -> String {
@@ -360,22 +332,21 @@ async fn status_codes_for(image_dir: &StdPath, animal: &str) -> Result<Vec<u16>,
 
 /// Start the web server
 pub async fn setup_server(
-    listen_addr: &str,
-    port: u16,
-    base_domain: &str,
+    cli: &CliOptions,
     enabled_pets: Vec<String>,
     db: Arc<DatabaseConnection>,
-    listen_port: u16,
 ) -> Result<(), anyhow::Error> {
-    let app = create_router().with_state(AppState::new(
-        base_domain,
+    let app_state = AppState::new(
+        cli.base_domain.as_str(),
+        cli.frontend_url.clone(),
         enabled_pets,
         db,
         IMAGE_DIR.clone(),
-        listen_port,
-    ));
+        cli.port.get(),
+    );
+    let app = create_router(&app_state).with_state(app_state);
 
-    let addr = format!("{}:{}", listen_addr, port);
+    let addr = format!("{}:{}", cli.listen_address, cli.port.get());
     info!("Starting server on http://{}", addr);
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -389,12 +360,14 @@ pub async fn setup_server(
 mod tests {
     use crate::config::setup_logging;
     use crate::constants::{TEST_BASE_DOMAIN, X_HTTPET_ANIMAL};
+    use crate::db::entities::votes;
 
     use super::*;
 
     use axum::body::Body;
     use axum::http::{Request, header::CONTENT_TYPE};
     use http_body_util::BodyExt;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     use sea_orm_migration::MigratorTrait;
     use tempfile::TempDir;
     use tower::ServiceExt;
@@ -419,6 +392,7 @@ mod tests {
         let image_dir = tempfile::tempdir().expect("create temp image dir");
         let app_state = AppState::new(
             TEST_BASE_DOMAIN,
+            None,
             enabled,
             db,
             image_dir.path().to_path_buf(),
@@ -443,7 +417,7 @@ mod tests {
     #[tokio::test]
     async fn unenabled_pet_returns_vote_page() {
         let state = setup_test_state().await;
-        let app = create_router().with_state(state.app_state.clone());
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
 
         let request = Request::builder()
             .method("GET")
@@ -474,7 +448,7 @@ mod tests {
 
         let _image_path = state.app_state.write_test_image("dog", 200);
 
-        let app: Router = create_router().with_state(state.app_state.clone());
+        let app: Router = create_router(&state.app_state).with_state(state.app_state.clone());
 
         let request = Request::builder()
             .method("GET")
@@ -504,7 +478,6 @@ mod tests {
         );
         let body = read_body(response).await;
         assert!(!body.is_empty());
-
     }
 
     #[tokio::test]
@@ -517,7 +490,7 @@ mod tests {
             .expect("create pet");
 
         let _image_path = state.app_state.write_test_image("capybara", 418);
-        let app = create_router().with_state(state.app_state.clone());
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
 
         let request = Request::builder()
             .method("GET")
@@ -544,14 +517,13 @@ mod tests {
         );
         let body = read_body(response).await;
         assert!(!body.is_empty());
-
     }
 
     #[tokio::test]
     async fn vote_endpoint_increments_daily_votes() {
         let state = setup_test_state().await;
         let db = state.app_state.db.clone();
-        let app = create_router().with_state(state.app_state.clone());
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
 
         for _ in 0..2 {
             let request = Request::builder()
@@ -563,9 +535,7 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK);
         }
 
-        let pet = pets::Entity::find()
-            .filter(pets::Column::Name.eq("cat"))
-            .one(db.as_ref())
+        let pet = pets::Entity::find_by_name(db.as_ref(), "cat")
             .await
             .expect("fetch pet")
             .expect("pet exists");
@@ -585,7 +555,7 @@ mod tests {
     async fn vote_form_adds_pet() {
         let state = setup_test_state().await;
         let db = state.app_state.db.clone();
-        let app = create_router().with_state(state.app_state.clone());
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
 
         let request = Request::builder()
             .method("POST")
@@ -617,7 +587,7 @@ mod tests {
     async fn admin_page_renders_pet_stats() {
         let state = setup_test_state().await;
         let db = state.app_state.db.clone();
-        let app = create_router().with_state(state.app_state.clone());
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
 
         let pet = pets::ActiveModel {
             name: Set("fox".to_string()),
@@ -641,6 +611,7 @@ mod tests {
         let request = Request::builder()
             .method("GET")
             .uri("/admin/")
+            .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
@@ -650,10 +621,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_redirects_non_base_domain() {
+        let state = setup_test_state().await;
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/?from=dog")
+            .header("host", &format!("dog.{}", TEST_BASE_DOMAIN))
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .expect("missing redirect location")
+            .to_str()
+            .expect("invalid location header");
+        assert!(location.contains(TEST_BASE_DOMAIN));
+        assert!(location.ends_with("/admin/?from=dog"));
+    }
+
+    #[tokio::test]
     async fn homepage_lists_enabled_and_top_votes() {
         let state = setup_test_state().await;
         let db = state.app_state.db.clone();
-        let app = create_router().with_state(state.app_state.clone());
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
 
         let dog = pets::ActiveModel {
             name: Set("dog".to_string()),
@@ -717,7 +712,7 @@ mod tests {
             .expect("create pet");
         let _image_path = state.app_state.write_test_image("dog", 404);
 
-        let app = create_router().with_state(state.app_state.clone());
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
 
         let request = Request::builder()
             .method("GET")
@@ -729,7 +724,6 @@ mod tests {
         let body = read_body(response).await;
         assert!(body.contains("Available status codes"));
         assert!(body.contains("404"));
-
     }
 
     #[tokio::test]
@@ -737,12 +731,13 @@ mod tests {
         let state = setup_test_state().await;
         let db = state.app_state.db.clone();
         let enabled_list = state.app_state.enabled_pets.clone();
-        let app = create_router().with_state(state.app_state.clone());
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
 
         let request = Request::builder()
             .method("POST")
             .uri("/admin/pets/otter")
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header("host", TEST_BASE_DOMAIN)
             .body(Body::from("enabled=on"))
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
@@ -764,12 +759,13 @@ mod tests {
     async fn admin_create_pet_adds_dog() {
         let state = setup_test_state().await;
         let db = state.app_state.db.clone();
-        let app = create_router().with_state(state.app_state.clone());
+        let app = create_router(&state.app_state).with_state(state.app_state.clone());
 
         let request = Request::builder()
             .method("POST")
             .uri("/admin/pets")
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header("host", TEST_BASE_DOMAIN)
             .body(Body::from("name=dog&enabled=on"))
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
