@@ -37,6 +37,7 @@ pub(crate) struct StatusListTemplate {
     pub(crate) name: String,
     pub(crate) status_codes: Vec<u16>,
     pub(crate) base_domain: String,
+    state: AppState,
 }
 
 /// handles the / GET
@@ -60,6 +61,7 @@ pub(crate) async fn root_handler(
             name: animal.to_string(),
             status_codes,
             base_domain: state.base_domain.clone(),
+            state,
         }
         .into_response());
     }

@@ -447,7 +447,10 @@ mod tests {
         );
         assert_eq!(app_state.base_url(), "https://example.com/front");
         assert!(!app_state.base_url().ends_with('/'));
-        assert_eq!(app_state.pet_base_url("dog"), "https://dog.example.com/front");
+        assert_eq!(
+            app_state.pet_base_url("dog"),
+            "https://dog.example.com/front"
+        );
         assert!(!app_state.pet_base_url("dog").ends_with('/'));
     }
 
@@ -767,7 +770,7 @@ mod tests {
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
         let body = read_body(response).await;
-        assert!(body.contains("Available status codes"));
+        assert!(body.contains("Part of the"));
         assert!(body.contains("404"));
     }
 
