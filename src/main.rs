@@ -45,7 +45,7 @@ async fn main() -> Result<ExitCode, Box<std::io::Error>> {
     };
 
     if let Err(err) = httpet::db::migrations::Migrator::up(db.as_ref(), None).await {
-        error!("Database migration error: {}", err);
+        error!(error=?err, db_path=cli.database_path.as_deref().unwrap_or("./db/httpet.sqlite"), "Database migration error");
         return Err(Box::new(std::io::Error::other(err)));
     }
 

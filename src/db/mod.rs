@@ -4,6 +4,7 @@ pub mod migrations;
 use std::sync::Arc;
 
 use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbErr};
+use tracing::error;
 
 /// Production Database connection
 pub async fn connect_db(path: &str, debug: bool) -> Result<Arc<DatabaseConnection>, DbErr> {
@@ -12,8 +13,13 @@ pub async fn connect_db(path: &str, debug: bool) -> Result<Arc<DatabaseConnectio
     options
         .sqlx_logging(debug)
         .acquire_timeout(std::time::Duration::from_secs(1))
-        .connect_timeout(std::time::Duration::from_secs(1));
-    Ok(Arc::new(Database::connect(options).await?))
+        .connect_timeout(std::time::Duration::from_secs(1))
+        .connect_lazy(false);
+    Ok(Arc::new(
+        Database::connect(options.clone())
+            .await
+            .inspect_err(|_| error!("Failed startup with options: {:?}", options))?,
+    ))
 }
 
 #[cfg(test)]
