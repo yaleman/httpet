@@ -1,8 +1,8 @@
+use axum::body::Body;
 use axum::extract::FromRequestParts;
+use axum::http::Request;
 use axum::http::header::HOST;
 use axum::http::request::Parts;
-use axum::body::Body;
-use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::{Redirect, Response};
 
