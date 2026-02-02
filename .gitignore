@@ -4,3 +4,4 @@ tarpaulin-report.html
 ./db/
 .DS_Store
 build_rs_cov.profraw
+debug_image_response.json
