@@ -77,6 +77,7 @@ pub(crate) struct AdminPetTemplate {
 pub(crate) struct AdminUploadTemplate {
     pet_name: String,
     status_code: u16,
+    status_name: String,
     status_summary: String,
     status_mdn_url: String,
     csrf_token: String,
@@ -263,6 +264,7 @@ pub(crate) async fn admin_pet_upload_view(
     Ok(AdminUploadTemplate {
         pet_name,
         status_code: path.status_code,
+        status_name: info.name.clone(),
         status_summary: info.summary.clone(),
         status_mdn_url: info.mdn_url.clone(),
         csrf_token,

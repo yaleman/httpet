@@ -18,6 +18,8 @@ pub const MDN_STATUS_URL: &str =
 /// Metadata for an HTTP status code.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 pub struct StatusInfo {
+    /// Status name from MDN.
+    pub name: String,
     /// Short summary text from MDN.
     pub summary: String,
     /// MDN reference URL for the status code.
@@ -97,9 +99,9 @@ pub fn fetch_status_page() -> anyhow::Result<String> {
 }
 
 /// parses the status entries from the MDN status code reference page
-pub fn parse_status_entries(page_html: &str) -> anyhow::Result<Vec<(u16, String, String)>> {
+pub fn parse_status_entries(page_html: &str) -> anyhow::Result<Vec<(u16, String, String, String)>> {
     let entry_re = RegexBuilder::new(
-        r#"<dt id="[^"]+">\s*<a href="([^"]+)"><code>(\d{3})\s+[^<]+</code></a>.*?</dt>\s*<dd>\s*(.*?)</dd>"#,
+        r#"<dt id="[^"]+">\s*<a href="([^"]+)"><code>(\d{3})\s+([^<]+)</code></a>.*?</dt>\s*<dd>\s*(.*?)</dd>"#,
     )
     .dot_matches_new_line(true)
     .build()
@@ -120,8 +122,12 @@ pub fn parse_status_entries(page_html: &str) -> anyhow::Result<Vec<(u16, String,
             .get(2)
             .context("Missing status code capture")?
             .as_str();
-        let dd = captures
+        let name = captures
             .get(3)
+            .context("Missing status name capture")?
+            .as_str();
+        let dd = captures
+            .get(4)
             .context("Missing description capture")?
             .as_str();
 
@@ -135,6 +141,11 @@ pub fn parse_status_entries(page_html: &str) -> anyhow::Result<Vec<(u16, String,
 
         let stripped = tag_re.replace_all(paragraph, "");
         let summary = decode_html_entities(stripped.trim()).to_string();
+        let name = decode_html_entities(name).to_string();
+        let name = name
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         let code_num: u16 = code
             .parse()
             .with_context(|| format!("Invalid status code {code}"))?;
@@ -144,23 +155,23 @@ pub fn parse_status_entries(page_html: &str) -> anyhow::Result<Vec<(u16, String,
             format!("https://developer.mozilla.org{href}")
         };
 
-        entries.push((code_num, summary, mdn_url));
+        entries.push((code_num, name, summary, mdn_url));
     }
 
-    entries.sort_by_key(|(code, _, _)| *code);
+    entries.sort_by_key(|(code, _, _, _)| *code);
     Ok(entries)
 }
 
 /// writes out the file
 pub fn write_status_codes(
     path: &PathBuf,
-    entries: Vec<(u16, String, String)>,
+    entries: Vec<(u16, String, String, String)>,
 ) -> anyhow::Result<()> {
     let mut map = BTreeMap::new();
-    for (code, summary, mdn_url) in entries {
+    for (code, name, summary, mdn_url) in entries {
         map.insert(
             code.to_string(),
-            json!({ "summary": summary, "mdn_url": mdn_url }),
+            json!({ "name": name, "summary": summary, "mdn_url": mdn_url }),
         );
     }
 

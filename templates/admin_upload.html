@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Upload {{ pet_name }} {{ status_code }} - httpet admin</title>
+    <title>Upload {{ pet_name }} {{ status_code }} {{ status_name }} - httpet admin</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body>
@@ -18,7 +18,7 @@
       </section>
       {% endif %}
       <section class="card">
-        <h2>Upload {{ pet_name }} {{ status_code }}</h2>
+        <h2>Upload {{ pet_name }}/{{ status_code }}: {{ status_name }}</h2>
         <p class="status-summary">{{ status_summary }}</p>
         <a class="status-link" href="{{ status_mdn_url }}">[MDN]</a>
         <form method="post" action="/admin/images" enctype="multipart/form-data">

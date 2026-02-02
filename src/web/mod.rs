@@ -863,7 +863,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_upload_page_includes_status_summary_and_mdn_link() {
+    async fn admin_upload_page_includes_status_name_summary_and_mdn_link() {
         let (state, app) = get_test_app().await;
 
         state
@@ -882,6 +882,7 @@ mod tests {
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
         let body = read_body(response).await;
+        assert!(body.contains(&info.name));
         assert!(body.contains(&info.summary));
         assert!(body.contains(&info.mdn_url));
     }
@@ -981,6 +982,8 @@ mod tests {
             .await
             .expect("create pet");
         state.write_test_image("dog", 404);
+        let status_map = crate::status_codes::status_codes().expect("load status codes");
+        let info = status_map.get(&404).expect("status info");
 
         let request = Request::builder()
             .method("GET")
@@ -992,6 +995,7 @@ mod tests {
         let body = read_body(response).await;
         assert!(body.contains("Part of the"));
         assert!(body.contains("404"));
+        assert!(body.contains(&info.name));
         assert!(body.contains("href=\"/404\""));
         assert!(!body.contains("href=\"/dog/404\""));
     }
@@ -1005,6 +1009,8 @@ mod tests {
             .await
             .expect("create pet");
         state.write_test_image("dog", 404);
+        let status_map = crate::status_codes::status_codes().expect("load status codes");
+        let info = status_map.get(&404).expect("status info");
 
         let request = Request::builder()
             .method("GET")
@@ -1017,6 +1023,7 @@ mod tests {
         assert!(body.contains("Part of the"));
         assert!(body.contains("MDN"));
         assert!(body.contains("404"));
+        assert!(body.contains(&info.name));
         assert!(body.contains("href=\"/dog/404\""));
         assert!(!body.contains("href=\"/404\""));
     }

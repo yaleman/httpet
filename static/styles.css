@@ -172,6 +172,11 @@ ul.pet-list li.pet {
 	gap: 12px;
 }
 
+.status-name {
+	font-size: 1rem;
+	color: #475569;
+}
+
 .status-summary {
 	font-size: 1rem;
 	color: #475569;

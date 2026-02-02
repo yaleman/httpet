@@ -29,6 +29,7 @@ pub(crate) struct TopPet {
 #[derive(Clone, Debug)]
 pub(crate) struct StatusCodeEntry {
     pub(crate) code: u16,
+    pub(crate) name: String,
     pub(crate) summary: String,
     pub(crate) mdn_url: String,
 }
@@ -74,6 +75,7 @@ pub(crate) async fn pet_status_list(
         };
         status_entries.push(StatusCodeEntry {
             code,
+            name: info.name.clone(),
             summary: info.summary.clone(),
             mdn_url: info.mdn_url.clone(),
         });
