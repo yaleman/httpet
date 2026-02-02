@@ -826,6 +826,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_page_prompts_for_orphan_image_folder() {
+        let (state, app) = get_test_app().await;
+
+        state.write_test_image("badger", 404);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        let body = read_body(response).await;
+        assert!(body.contains("Image folders without pets"));
+        assert!(body.contains("Create badger"));
+    }
+
+    #[tokio::test]
     async fn admin_pet_page_lists_available_missing_and_unknown() {
         let (state, app) = get_test_app().await;
 

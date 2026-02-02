@@ -17,6 +17,21 @@
         <p>{{ flash_message }}</p>
       </section>
       {% endif %}
+      {% if has_orphan_pets %}
+      <section class="card">
+        <h2>Image folders without pets</h2>
+        <p>We found image folders on disk that don’t have a matching pet yet.</p>
+        <div class="grid">
+          {% for pet_name in orphan_pets %}
+          <form method="post" action="/admin/pets">
+            <input type="hidden" name="name" value="{{ pet_name }}">
+            <label><input type="checkbox" name="enabled" checked> Enabled</label>
+            <button type="submit">Create {{ pet_name }}</button>
+          </form>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
       <section class="card">
         <h2>Add a pet</h2>
         <form method="post" action="/admin/pets">

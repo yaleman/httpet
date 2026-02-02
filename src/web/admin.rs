@@ -51,6 +51,8 @@ pub(crate) struct AdminTemplate {
     start_label: String,
     end_label: String,
     has_pets: bool,
+    has_orphan_pets: bool,
+    orphan_pets: Vec<String>,
     state: AppState,
     csrf_token: String,
     has_flash: bool,
@@ -111,6 +113,7 @@ pub(crate) async fn admin_handler(
         .order_by_asc(pets::Column::Name)
         .all(state.db.as_ref())
         .await?;
+    let pet_names: HashSet<String> = pet_db.iter().map(|pet| pet.name.clone()).collect();
 
     let date_labels: Vec<NaiveDate> = (0..30)
         .map(|offset| start_date + Duration::days(offset))
@@ -145,6 +148,20 @@ pub(crate) async fn admin_handler(
     let start_label = date_labels.first().map(format_date).unwrap_or_default();
     let end_label = date_labels.last().map(format_date).unwrap_or_default();
 
+    let image_dirs = list_image_dirs(&state.image_dir).await?;
+    let mut orphan_pets = Vec::new();
+    let mut seen = HashSet::new();
+    for dir in image_dirs {
+        let name = normalize_pet_name(&dir);
+        if name.is_empty() || pet_names.contains(&name) {
+            continue;
+        }
+        if seen.insert(name.clone()) {
+            orphan_pets.push(name);
+        }
+    }
+    orphan_pets.sort();
+
     let csrf_token = csrf_token(&session).await?;
     let flash = flash::take_flash_message(&session).await?;
     let (has_flash, flash_message, flash_class) = match flash {
@@ -153,6 +170,8 @@ pub(crate) async fn admin_handler(
     };
     Ok(AdminTemplate {
         has_pets: !pets.is_empty(),
+        has_orphan_pets: !orphan_pets.is_empty(),
+        orphan_pets,
         pets,
         start_label,
         end_label,
@@ -589,6 +608,27 @@ async fn list_pet_images(image_dir: &StdPath, pet_name: &str) -> Result<Vec<Stri
     }
     images.sort();
     Ok(images)
+}
+
+async fn list_image_dirs(image_dir: &StdPath) -> Result<Vec<String>, HttpetError> {
+    let mut entries = match tokio::fs::read_dir(image_dir).await {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(HttpetError::InternalServerError(err.to_string())),
+    };
+
+    let mut dirs = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let file_type = entry.file_type().await?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        if let Some(name) = entry.file_name().to_str() {
+            dirs.push(name.to_string());
+        }
+    }
+    dirs.sort();
+    Ok(dirs)
 }
 
 /// Turns the votes into an SVG chart
