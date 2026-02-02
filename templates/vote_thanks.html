@@ -1,16 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Thanks for voting</title>
-  <link rel="stylesheet" href="/static/styles.css">
-</head>
-<body class="thanks-page">
-  <main>
-    <h1>Thanks for voting for {{ name }}!</h1>
-    <p>We track votes daily and will prioritize new pets based on demand.</p>
-    <p><a href="/">Return to home</a></p>
-  </main>
-</body>
-</html>
+{% extends "base_template.html" %}
+{% block title %}Thanks for voting for {{ name }} - {{ super() }}{% endblock title %}
+{% block subtitle %}Your vote for {{ name }} has been recorded.{% endblock subtitle %}
+{% block content %}
+<h1>Thanks for voting for {{ name }}!</h1>
+<p>We track votes daily and will prioritize new pets based on demand.</p>
+<p><a href="/"><button>Return home</button></a></p>
+{% endblock content %}

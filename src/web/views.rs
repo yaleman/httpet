@@ -50,7 +50,6 @@ pub(crate) struct StatusListTemplate {
     pub(crate) status_codes: Vec<StatusCodeEntry>,
     pub(crate) base_domain: String,
     pub(crate) status_link_prefix: String,
-    state: AppState,
 }
 
 pub(crate) async fn pet_status_list(
@@ -86,7 +85,6 @@ pub(crate) async fn pet_status_list(
         status_codes: status_entries,
         base_domain: state.base_domain.clone(),
         status_link_prefix: status_link_prefix.to_string(),
-        state,
     }
     .into_response())
 }
