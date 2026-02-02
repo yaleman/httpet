@@ -1,36 +1,26 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ name }} status codes</title>
-    <link rel="stylesheet" href="/static/styles.css">
-  </head>
-  <body>
-    <header>
-      <h1>{{ name }}.{{ base_domain }}</h1>
-      <p>Part of the <a href="{{ state.base_url() }}">{{ base_domain }}</a> network.</p>
-    </header>
-    <main>
-      <section class="card">
-        <h2>Available images</h2>
-        {% if status_codes.len() == 0 %}
-        <p>No status images found yet.</p>
-        {% else %}
-        <div class="grid">
-          {% for status in status_codes %}
-          <div class="status-card">
-            <div class="status-code">
-              <a href="{{ status_link_prefix }}/{{ status.code }}"><strong>{{ status.code }}</strong></a>
-              <span class="status-name">{{ status.name }}</span>
-            </div>
-            <p class="status-summary">{{ status.summary }}</p>
-            <a class="status-link" href="{{ status.mdn_url }}">[MDN]</a>
-          </div>
-          {% endfor %}
-        </div>
-        {% endif %}
-      </section>
-    </main>
-  </body>
-</html>
+{% extends "base_template.html" %}
+
+{% block title %}{{ name }} status codes - {{ super() }}{% endblock title %}
+{% block subtitle %}Status codes for {{ name }}.{{ base_domain }}{% endblock subtitle %}
+
+{% block content %}
+<section class="card">
+  <h2>Available images</h2>
+  {% if status_codes.len() == 0 %}
+  <p>No status images found yet.</p>
+  {% else %}
+  <div class="grid">
+    {% for status in status_codes %}
+    <div class="status-card">
+      <div class="status-code">
+        <a href="{{ status_link_prefix }}/{{ status.code }}"><strong>{{ status.code }}</strong></a>
+        <span class="status-name">{{ status.name }}</span>
+      </div>
+      <p class="status-summary">{{ status.summary }}</p>
+      <a class="status-link" href="{{ status.mdn_url }}">[MDN]</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endblock content %}
