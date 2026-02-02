@@ -8,7 +8,9 @@ use chrono::{Duration, NaiveDate, Utc};
 #[allow(unused_imports)]
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use std::collections::HashMap;
-use tracing::instrument;
+use std::io::{Cursor, ErrorKind};
+use std::path::Path as StdPath;
+use tracing::{debug, instrument};
 
 #[derive(Deserialize)]
 pub(crate) struct PetUpdateForm {
@@ -19,6 +21,12 @@ pub(crate) struct PetUpdateForm {
 pub(crate) struct PetCreateForm {
     name: String,
     enabled: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PetDeleteForm {
+    csrf_token: String,
+    delete_images: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -36,6 +44,18 @@ pub(crate) struct AdminTemplate {
     end_label: String,
     has_pets: bool,
     state: AppState,
+    csrf_token: String,
+    has_flash: bool,
+    flash_message: String,
+    flash_class: String,
+}
+
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_delete.html")]
+pub(crate) struct DeletePetTemplate {
+    pet_name: String,
+    has_images: bool,
+    image_files: Vec<String>,
     csrf_token: String,
     has_flash: bool,
     flash_message: String,
@@ -99,6 +119,43 @@ pub(crate) async fn admin_handler(
         start_label,
         end_label,
         state,
+        csrf_token,
+        has_flash,
+        flash_message,
+        flash_class,
+    })
+}
+
+pub(crate) async fn delete_pet_view(
+    State(state): State<AppState>,
+    session: Session,
+    Path(name): Path<String>,
+) -> Result<DeletePetTemplate, HttpetError> {
+    let pet_name = normalize_pet_name(&name);
+    if pet_name.is_empty() {
+        return Err(HttpetError::BadRequest);
+    }
+
+    let pet_exists = pets::Entity::find_by_name(state.db.as_ref(), &pet_name)
+        .await?
+        .is_some();
+    if !pet_exists {
+        return Err(HttpetError::NotFound(pet_name));
+    }
+
+    let image_files = list_pet_images(&state.image_dir, &pet_name).await?;
+    let has_images = !image_files.is_empty();
+    let csrf_token = csrf_token(&session).await?;
+    let flash = flash::take_flash_message(&session).await?;
+    let (has_flash, flash_message, flash_class) = match flash {
+        Some(message) => (true, message.text.to_string(), message.class.to_string()),
+        None => (false, String::new(), String::new()),
+    };
+
+    Ok(DeletePetTemplate {
+        pet_name,
+        has_images,
+        image_files,
         csrf_token,
         has_flash,
         flash_message,
@@ -218,11 +275,60 @@ pub(crate) async fn upload_image_handler(
     Ok(Redirect::to("/admin/"))
 }
 
+/// Deletes a pet and its images
+#[instrument(skip_all, fields(name = %name, delete_images=?form.delete_images))]
+pub(crate) async fn delete_pet_post(
+    State(state): State<AppState>,
+    session: Session,
+    Path(name): Path<String>,
+    Form(form): Form<PetDeleteForm>,
+) -> Result<Redirect, HttpetError> {
+    validate_csrf(&session, &form.csrf_token).await?;
+
+    let pet_name = normalize_pet_name(&name);
+    if pet_name.is_empty() {
+        return Err(HttpetError::BadRequest);
+    }
+
+    let image_files = list_pet_images(&state.image_dir, &pet_name).await?;
+    if !image_files.is_empty() {
+        if form.delete_images.is_none() {
+            flash::set_flash(&session, flash::FLASH_DELETE_IMAGES_REQUIRED).await?;
+            return Ok(Redirect::to(&format!("/admin/pets/{}/delete", pet_name)));
+        }
+        let pet_dir = state.image_dir.join(&pet_name);
+        if let Err(err) = tokio::fs::remove_dir_all(&pet_dir).await
+            && err.kind() != ErrorKind::NotFound
+        {
+            return Err(HttpetError::InternalServerError(err.to_string()));
+        }
+    }
+
+    state.delete_pet(&pet_name).await?;
+    Ok(Redirect::to("/admin/"))
+}
+
+/// validates if an image is a valid JPEG file
 fn is_valid_jpeg(bytes: &[u8]) -> bool {
     if bytes.len() < 4 {
+        debug!("JPEG is too short");
         return false;
     }
-    bytes.starts_with(&[0xFF, 0xD8]) && bytes.ends_with(&[0xFF, 0xD9])
+    if !bytes.starts_with(&[0xFF, 0xD8]) && bytes.ends_with(&[0xFF, 0xD9]) {
+        debug!("JPEG does not have valid start/end markers");
+        return false;
+    }
+    if let Ok(image) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() {
+        if image.format() != Some(image::ImageFormat::Jpeg) {
+            debug!("Image format is not JPEG");
+            false
+        } else {
+            true
+        }
+    } else {
+        debug!("Failed to read image for format checking");
+        false
+    }
 }
 
 /// zips the dates and votes into a series of vote counts
@@ -231,6 +337,33 @@ fn build_vote_series(dates: &[NaiveDate], votes: Option<&HashMap<NaiveDate, i32>
         .iter()
         .map(|date| votes.and_then(|map| map.get(date).copied()).unwrap_or(0))
         .collect()
+}
+
+async fn list_pet_images(image_dir: &StdPath, pet_name: &str) -> Result<Vec<String>, HttpetError> {
+    let dir = image_dir.join(pet_name);
+    let mut entries = match tokio::fs::read_dir(&dir).await {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(HttpetError::InternalServerError(err.to_string())),
+    };
+
+    let mut images = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let is_jpg = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("jpg"))
+            .unwrap_or(false);
+        if !is_jpg {
+            continue;
+        }
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            images.push(name.to_string());
+        }
+    }
+    images.sort();
+    Ok(images)
 }
 
 /// Turns the votes into an SVG chart
@@ -286,4 +419,24 @@ fn render_vote_chart(pet_name: &str, counts: &[i32]) -> String {
 /// Formats a date as "Mon DD"
 fn format_date(date: &NaiveDate) -> String {
     date.format("%b %d").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_is_valid_jpeg() {
+        use crate::config::setup_logging;
+        let _ = setup_logging(true);
+
+        assert!(is_valid_jpeg(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/images/dog/100.jpg"
+        ))));
+        assert!(!is_valid_jpeg(&[]));
+        assert!(!is_valid_jpeg(&[0xFF, 0xD8, 0x00, 0xFF, 0xD9]));
+        assert!(!is_valid_jpeg(b"This is not a JPEG file."));
+    }
 }

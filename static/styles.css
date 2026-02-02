@@ -33,18 +33,16 @@ body {
 }
 
 main {
-	padding: 24px;
+	padding: 1.0rem;
 	display: grid;
-	gap: 24px;
-	max-width: 1200px;
+	gap: 1.5rem;
+	max-width: 99vw;
 	margin: 0 auto;
 }
 
 h1 {
 	margin: 0 0 8px 0;
 }
-
-
 
 header {
 	background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
@@ -203,11 +201,29 @@ form {
 	flex-wrap: wrap;
 }
 
+.pet-actions {
+	display: flex;
+	gap: 1rem;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+.form-actions {
+	display: flex;
+	gap: 1rem;
+	flex-wrap: wrap;
+	align-items: center;
+}
+
 label {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	font-size: 14px;
+}
+
+.confirm-checkbox {
+	width: 100%;
 }
 
 input[type="text"] {
@@ -217,14 +233,41 @@ input[type="text"] {
 	min-width: 200px;
 }
 
-button {
-	border: none;
-	font-size: 1.5rem;
-	border-radius: 1rem;
-	padding: 0.5rem 1rem;
+button, .button-link {
 	background: var(--primary-color);
 	color: var(--primary-text);
-	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 1rem;
+	padding: 0.5rem 1rem;
+	font-size: 1.1rem;
+	text-decoration: none;
+}
+
+.button-link:hover {
+	background: #cbd5f5;
+	color: #0f172a;
+}
+
+.danger {
+	background: #dc2626;
+	color: #fff;
+}
+
+.danger:hover {
+	background: #b91c1c;
+	color: #fff;
+}
+
+.file-list {
+	margin: 0 0 16px 20px;
+	padding: 0;
+	color: #0f172a;
+}
+
+.file-list li {
+	margin-bottom: 4px;
 }
 
 svg {

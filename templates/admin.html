@@ -76,10 +76,13 @@
             <span>{{ end_label }}</span>
           </div>
           {% endif %}
-          <form method="post" action="/admin/pets/{{ pet.name }}">
-            <label><input type="checkbox" name="enabled" {% if pet.enabled %}checked{% endif %}> Enabled</label>
-            <button type="submit">Save</button>
-          </form>
+          <div class="pet-actions">
+            <form method="post" action="/admin/pets/{{ pet.name }}">
+              <label><input type="checkbox" name="enabled" {% if pet.enabled %}checked{% endif %}> Enabled</label>
+              <button type="submit">Save</button>
+            </form>
+            <a class="button-link danger" href="/admin/pets/{{ pet.name }}/delete">Delete pet</a>
+          </div>
         </section>
         {% endfor %}
       </section>

@@ -5,6 +5,7 @@ use crate::error::HttpetError;
 const FLASH_FLAG_KEY: &str = "flash_flag";
 
 pub(crate) const FLASH_UPLOAD_SUCCESS: u16 = 1;
+pub(crate) const FLASH_DELETE_IMAGES_REQUIRED: u16 = 2;
 
 #[derive(Clone, Debug)]
 pub(crate) struct FlashMessage {
@@ -42,6 +43,10 @@ fn message_for(flag: u16) -> Option<FlashMessage> {
         FLASH_UPLOAD_SUCCESS => Some(FlashMessage {
             text: "Upload successful. Your image is now available.",
             class: "success",
+        }),
+        FLASH_DELETE_IMAGES_REQUIRED => Some(FlashMessage {
+            text: "Please confirm that you want to delete all images for this pet.",
+            class: "warning",
         }),
         _ => None,
     }

@@ -38,6 +38,7 @@ html-escape = "0.2.13"
 regex = "1.11.3"
 ureq = "2.12.1"
 time = "0.3.44"
+image = { version = "0.25.9", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 http-body-util = "0.1.2"

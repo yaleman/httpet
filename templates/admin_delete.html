@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Delete pet • httpet admin</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <header>
+      <h1><a href="/">httpet</a> admin</h1>
+      <p>Delete a pet and its status images.</p>
+    </header>
+    <main>
+      {% if has_flash %}
+      <section class="card notice {{ flash_class }}">
+        <p>{{ flash_message }}</p>
+      </section>
+      {% endif %}
+      <section class="card">
+        <h2>Delete {{ pet_name }}</h2>
+        <p>This will remove the pet and its vote history.</p>
+        {% if has_images %}
+        <p>Images on disk:</p>
+        <ul class="file-list">
+          {% for image in image_files %}
+          <li>{{ image }}</li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p>No images found for this pet.</p>
+        {% endif %}
+        <form method="post" action="/admin/pets/{{ pet_name }}/delete">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          {% if has_images %}
+          <label class="confirm-checkbox">
+            <input type="checkbox" name="delete_images" required>
+            Delete all images for {{ pet_name }}.
+          </label>
+          {% endif %}
+          <div class="form-actions">
+            <button type="submit" class="danger">Delete pet</button>
+            <a class="button-link" href="/admin/">Cancel</a>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

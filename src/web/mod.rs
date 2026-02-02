@@ -26,7 +26,10 @@ mod views;
 
 use prelude::*;
 
-use admin::{admin_handler, create_pet_handler, update_pet_handler, upload_image_handler};
+use admin::{
+    admin_handler, create_pet_handler, delete_pet_post, delete_pet_view, update_pet_handler,
+    upload_image_handler,
+};
 use csrf::validate_csrf;
 use middleware::{AnimalDomain, admin_base_domain_only};
 use url::Url;
@@ -131,6 +134,23 @@ impl AppState {
             .into_iter()
             .map(|pet| pet.name)
             .collect();
+        Ok(())
+    }
+
+    pub(crate) async fn delete_pet(&self, pet_name: &str) -> Result<(), HttpetError> {
+        let db_txn: DatabaseTransaction = self.db.as_ref().begin().await?;
+        let pet = pets::Entity::find_by_name(&db_txn, pet_name).await?;
+
+        if let Some(pet) = pet {
+            let am = pet.into_active_model();
+            am.delete(&db_txn).await?;
+        } else {
+            return Err(HttpetError::NotFound(pet_name.to_string()));
+        }
+
+        db_txn.commit().await?;
+        let mut enabled = self.enabled_pets.write().await;
+        *enabled = pets::Entity::enabled_names(&self.db).await?;
         Ok(())
     }
 }
@@ -328,6 +348,10 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
         .route(
             "/admin/pets/{name}",
             axum::routing::post(update_pet_handler),
+        )
+        .route(
+            "/admin/pets/{name}/delete",
+            axum::routing::get(delete_pet_view).post(delete_pet_post),
         )
         .route("/admin/images", axum::routing::post(upload_image_handler))
         .layer(axum::middleware::from_fn_with_state(
@@ -1089,6 +1113,84 @@ mod tests {
             .await
             .expect("uploaded file metadata");
         assert!(metadata.is_file());
+    }
+
+    #[tokio::test]
+    async fn admin_delete_requires_image_confirmation() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+        state.write_test_image("dog", 404);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let (body, cookie) = read_body_and_cookie(response).await;
+        let csrf_token = extract_csrf_token(&body);
+        let mut cookie = cookie.expect("missing session cookie");
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/pets/dog/delete")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let body = read_body(response).await;
+        assert!(body.contains("404.jpg"));
+        assert!(body.contains("delete_images"));
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/admin/pets/dog/delete")
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
+            .body(Body::from(format!("csrf_token={csrf_token}")))
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let (_body, new_cookie) = read_body_and_cookie(response).await;
+        if let Some(new_cookie) = new_cookie {
+            cookie = new_cookie;
+        }
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/pets/dog/delete")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let body = read_body(response).await;
+        assert!(body.contains("Please confirm"));
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/admin/pets/dog/delete")
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
+            .body(Body::from(format!(
+                "csrf_token={csrf_token}&delete_images=on"
+            )))
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let pet = pets::Entity::find_by_name(state.db.as_ref(), "dog")
+            .await
+            .expect("fetch pet");
+        assert!(pet.is_none());
+        assert!(!state.image_dir.join("dog").exists());
     }
 
     #[tokio::test]
