@@ -65,7 +65,7 @@
         <section class="card">
           <div class="pet-header">
             <div>
-              <h2><a href="{{ state.pet_base_url(pet.name) }}">{{ pet.name }}</a></h2>
+              <h2><a href="/admin/pets/{{ pet.name }}">{{ pet.name }}</a></h2>
             </div>
             <span class="pill{% if pet.enabled %} enabled{% endif %}">{% if pet.enabled %}enabled{% else %}disabled{% endif %}</span>
           </div>
@@ -81,6 +81,7 @@
               <label><input type="checkbox" name="enabled" {% if pet.enabled %}checked{% endif %}> Enabled</label>
               <button type="submit">Save</button>
             </form>
+            <a class="button-link" href="{{ state.pet_base_url(pet.name) }}">Public page</a>
             <a class="button-link danger" href="/admin/pets/{{ pet.name }}/delete">Delete pet</a>
           </div>
         </section>

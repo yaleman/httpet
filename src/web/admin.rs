@@ -1,13 +1,15 @@
 use super::csrf::{csrf_token, validate_csrf};
 use super::flash;
 use super::prelude::*;
+use crate::constants::X_HTTPET_ANIMAL;
 use crate::db::entities::{pets, votes};
+use crate::status_codes;
 use axum::extract::{Form, Multipart, Path, State};
-use axum::response::Redirect;
+use axum::response::{Redirect, Response};
 use chrono::{Duration, NaiveDate, Utc};
 #[allow(unused_imports)]
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, ErrorKind};
 use std::path::Path as StdPath;
 use tracing::{debug, instrument};
@@ -29,6 +31,12 @@ pub(crate) struct PetDeleteForm {
     delete_images: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct PetStatusPath {
+    name: String,
+    status_code: u16,
+}
+
 #[derive(Clone, Debug)]
 struct AdminPetView {
     name: String,
@@ -44,6 +52,33 @@ pub(crate) struct AdminTemplate {
     end_label: String,
     has_pets: bool,
     state: AppState,
+    csrf_token: String,
+    has_flash: bool,
+    flash_message: String,
+    flash_class: String,
+}
+
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_pet.html")]
+pub(crate) struct AdminPetTemplate {
+    pet_name: String,
+    public_url: String,
+    available_codes: Vec<u16>,
+    missing_codes: Vec<u16>,
+    has_unknown_files: bool,
+    unknown_files: Vec<String>,
+    has_flash: bool,
+    flash_message: String,
+    flash_class: String,
+}
+
+#[derive(Template, WebTemplate)]
+#[template(path = "admin_upload.html")]
+pub(crate) struct AdminUploadTemplate {
+    pet_name: String,
+    status_code: u16,
+    status_summary: String,
+    status_mdn_url: String,
     csrf_token: String,
     has_flash: bool,
     flash_message: String,
@@ -126,6 +161,149 @@ pub(crate) async fn admin_handler(
     })
 }
 
+pub(crate) async fn admin_pet_view(
+    State(state): State<AppState>,
+    session: Session,
+    Path(name): Path<String>,
+) -> Result<AdminPetTemplate, HttpetError> {
+    let pet_name = normalize_pet_name(&name);
+    if pet_name.is_empty() {
+        return Err(HttpetError::BadRequest);
+    }
+
+    let pet_exists = pets::Entity::find_by_name(state.db.as_ref(), &pet_name)
+        .await?
+        .is_some();
+    if !pet_exists {
+        return Err(HttpetError::NotFound(pet_name));
+    }
+
+    let status_map = status_codes::status_codes()
+        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+    let known_codes: Vec<u16> = status_map.keys().copied().collect();
+    let known_set: HashSet<u16> = known_codes.iter().copied().collect();
+
+    let image_files = list_pet_images(&state.image_dir, &pet_name).await?;
+    let mut available_codes = Vec::new();
+    let mut unknown_files = Vec::new();
+    for file in image_files {
+        let code = StdPath::new(&file)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| stem.parse::<u16>().ok());
+        if let Some(code) = code
+            && known_set.contains(&code)
+        {
+            available_codes.push(code);
+            continue;
+        }
+        unknown_files.push(file);
+    }
+    available_codes.sort_unstable();
+    available_codes.dedup();
+    let available_set: HashSet<u16> = available_codes.iter().copied().collect();
+    let missing_codes: Vec<u16> = known_codes
+        .iter()
+        .copied()
+        .filter(|code| !available_set.contains(code))
+        .collect();
+
+    let flash = flash::take_flash_message(&session).await?;
+    let (has_flash, flash_message, flash_class) = match flash {
+        Some(message) => (true, message.text.to_string(), message.class.to_string()),
+        None => (false, String::new(), String::new()),
+    };
+
+    Ok(AdminPetTemplate {
+        pet_name: pet_name.clone(),
+        public_url: state.pet_base_url(&pet_name),
+        available_codes,
+        missing_codes,
+        has_unknown_files: !unknown_files.is_empty(),
+        unknown_files,
+        has_flash,
+        flash_message,
+        flash_class,
+    })
+}
+
+pub(crate) async fn admin_pet_upload_view(
+    State(state): State<AppState>,
+    session: Session,
+    Path(path): Path<PetStatusPath>,
+) -> Result<AdminUploadTemplate, HttpetError> {
+    let pet_name = normalize_pet_name(&path.name);
+    if pet_name.is_empty() {
+        return Err(HttpetError::BadRequest);
+    }
+    if !(100..=599).contains(&path.status_code) {
+        return Err(HttpetError::BadRequest);
+    }
+
+    let pet_exists = pets::Entity::find_by_name(state.db.as_ref(), &pet_name)
+        .await?
+        .is_some();
+    if !pet_exists {
+        return Err(HttpetError::NotFound(pet_name));
+    }
+
+    let status_map = status_codes::status_codes()
+        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+    let Some(info) = status_map.get(&path.status_code) else {
+        return Err(HttpetError::NotFound(path.status_code.to_string()));
+    };
+
+    let csrf_token = csrf_token(&session).await?;
+    let flash = flash::take_flash_message(&session).await?;
+    let (has_flash, flash_message, flash_class) = match flash {
+        Some(message) => (true, message.text.to_string(), message.class.to_string()),
+        None => (false, String::new(), String::new()),
+    };
+
+    Ok(AdminUploadTemplate {
+        pet_name,
+        status_code: path.status_code,
+        status_summary: info.summary.clone(),
+        status_mdn_url: info.mdn_url.clone(),
+        csrf_token,
+        has_flash,
+        flash_message,
+        flash_class,
+    })
+}
+
+pub(crate) async fn admin_pet_image_handler(
+    State(state): State<AppState>,
+    Path(path): Path<PetStatusPath>,
+) -> Result<Response, HttpetError> {
+    let pet_name = normalize_pet_name(&path.name);
+    if pet_name.is_empty() {
+        return Err(HttpetError::BadRequest);
+    }
+    if !(100..=599).contains(&path.status_code) {
+        return Err(HttpetError::BadRequest);
+    }
+
+    let image_path = state.image_path(&pet_name, path.status_code);
+    let mut builder = Response::builder();
+    match tokio::fs::read(&image_path).await {
+        Ok(bytes) => {
+            if let Ok(value) = HeaderValue::from_str(&pet_name) {
+                builder = builder.header(X_HTTPET_ANIMAL, value);
+            }
+            builder = builder.header(CONTENT_TYPE, "image/jpeg");
+            builder
+                .body(axum::body::Body::from(bytes))
+                .map_err(HttpetError::from)
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => Err(HttpetError::NotFound(format!(
+            "{} {}",
+            pet_name, path.status_code
+        ))),
+        Err(err) => Err(HttpetError::InternalServerError(err.to_string())),
+    }
+}
+
 pub(crate) async fn delete_pet_view(
     State(state): State<AppState>,
     session: Session,
@@ -200,6 +378,7 @@ pub(crate) async fn upload_image_handler(
     let mut status_code: Option<u16> = None;
     let mut image_bytes: Option<Vec<u8>> = None;
     let mut csrf_token_value: Option<String> = None;
+    let mut redirect_to: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -240,6 +419,13 @@ pub(crate) async fn upload_image_handler(
                     .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
                 image_bytes = Some(bytes.to_vec());
             }
+            "redirect_to" => {
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+                redirect_to = Some(value);
+            }
             _ => {}
         }
     }
@@ -272,7 +458,11 @@ pub(crate) async fn upload_image_handler(
         .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
 
     flash::set_flash(&session, flash::FLASH_UPLOAD_SUCCESS).await?;
-    Ok(Redirect::to("/admin/"))
+    let redirect_target = redirect_to
+        .as_deref()
+        .filter(|target| target.starts_with("/admin/"))
+        .unwrap_or("/admin/");
+    Ok(Redirect::to(redirect_target))
 }
 
 /// Deletes a pet and its images
@@ -430,7 +620,6 @@ mod tests {
     fn test_is_valid_jpeg() {
         use crate::config::setup_logging;
         let _ = setup_logging(true);
-
         assert!(is_valid_jpeg(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/images/dog/100.jpg"

@@ -1,17 +1,31 @@
-
-
 :root {
+	--background: white;
 	--base-text: black;
-	--primary-color: #681dd8d8;
+	--color-subtitle: darkgray;
+
 	--primary-text: white;
-	--secondary-color: #ab79e0;
+	--primary: #681dd8d8;
+
+	--secondary: #ab79e0;
+
+	--danger-text: var(--primary-text);
+	--danger: #dc2626;
+	--danger-dark: #b91c1c;
+
+	--success-text: var(--primary-text);
+	--success: #16a34a;
+	--success-dark: #15803d;
+
+	--warning-text: var(--base-text);
+	--warning: #fcd084;
+	--warning-dark: #eb7e36;
+
 	color-scheme: light;
 }
 
 * {
 	box-sizing: border-box;
 }
-
 
 a {
 	text-decoration: none;
@@ -22,18 +36,18 @@ a:visited {
 }
 
 a:hover {
-	color: var(--primary-color);
+	color: var(--primary);
 }
 
 body {
 	margin: 0;
 	font-family: system-ui, sans-serif;
-	background: white;
+	background: var(--background);
 	color: var(--base-text);
 }
 
 main {
-	padding: 1.0rem;
+	padding: 1rem;
 	display: grid;
 	gap: 1.5rem;
 	max-width: 99vw;
@@ -44,13 +58,19 @@ h1 {
 	margin: 0 0 8px 0;
 }
 
+h3 {
+	margin: 0.1rem;
+	max-height: 1.2rem;
+}
+
 header {
-	background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+	background: linear-gradient(135deg, var(--primary), var(--secondary));
 	color: var(--primary-text);
 	padding: 2rem 1.5rem;
 }
 
-header h1 a, header h1 a:visited {
+header h1 a,
+header h1 a:visited {
 	color: var(--primary-text);
 	text-decoration: none;
 }
@@ -68,7 +88,7 @@ p {
 }
 
 .card {
-	background: white;
+	background: var(--background);
 	border-radius: 16px;
 	padding: 20px;
 	box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
@@ -76,32 +96,32 @@ p {
 
 .notice {
 	border: 1px solid #e2e8f0;
-	background: #f8fafc;
-	color: #0f172a;
+	background: var(--background);
+	color: var(--base-text);
 }
 
 .notice.success {
-	border-color: #86efac;
-	background: #f0fdf4;
-	color: #166534;
+	border-color: var(--success-dark);
+	background: var(--success);
+	color: var(--base-text);
 }
 
 .notice.warning {
-	border-color: #fde68a;
-	background: #fffbeb;
-	color: #92400e;
+	border-color: var(--warning-dark);
+	background: var(--warning);
+	color: var(--warning-text);
 }
 
 .notice.error {
-	border-color: #fecaca;
-	background: #fef2f2;
-	color: #991b1b;
+	border-color: var(--danger-dark);
+	background: var(--danger);
+	color: var(--danger-text);
 }
 
 .notice.info {
 	border-color: #bae6fd;
 	background: #eff6ff;
-	color: #1e3a8a;
+	color: var(--base-text);
 }
 
 .notice p {
@@ -159,7 +179,7 @@ ul.pet-list li.pet {
 
 .status-link {
 	font-size: 0.95rem;
-	color: var(--primary-color);
+	color: var(--primary);
 	text-decoration: none;
 }
 
@@ -208,6 +228,54 @@ form {
 	align-items: center;
 }
 
+.status-lists {
+	display: grid;
+	gap: 16px;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	align-items: start;
+}
+
+.status-panel {
+	display: grid;
+	gap: 12px;
+	align-content: start;
+}
+
+.code-grid {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	align-content: flex-start;
+	align-items: flex-start;
+}
+
+.code-pill {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 4rem;
+	padding: 0.5rem 1rem;
+	border-radius: 999px;
+	background: #e2e8f0;
+	color: var(--base-text);
+	font-weight: 600;
+}
+
+.code-pill:hover {
+	background: #cbd5f5;
+	color: var(--base-text);
+}
+
+.code-pill.missing {
+	background: #fee2e2;
+	color: #991b1b;
+}
+
+.code-pill.missing:hover {
+	background: #fecaca;
+	color: #7f1d1d;
+}
+
 .form-actions {
 	display: flex;
 	gap: 1rem;
@@ -233,8 +301,9 @@ input[type="text"] {
 	min-width: 200px;
 }
 
-button, .button-link {
-	background: var(--primary-color);
+button,
+.button-link {
+	background: var(--primary);
 	color: var(--primary-text);
 	display: inline-flex;
 	align-items: center;
@@ -251,19 +320,19 @@ button, .button-link {
 }
 
 .danger {
-	background: #dc2626;
-	color: #fff;
+	background: var(--danger);
+	color: var(--danger-text);
 }
 
 .danger:hover {
-	background: #b91c1c;
-	color: #fff;
+	background: var(--danger-dark);
+	color: var(--danger-text);
 }
 
 .file-list {
 	margin: 0 0 16px 20px;
 	padding: 0;
-	color: #0f172a;
+	color: var(--base-text);
 }
 
 .file-list li {
@@ -315,5 +384,5 @@ svg {
 }
 
 .thanks-page a {
-	color: red;
+	color: var(--danger);
 }

@@ -27,8 +27,8 @@ mod views;
 use prelude::*;
 
 use admin::{
-    admin_handler, create_pet_handler, delete_pet_post, delete_pet_view, update_pet_handler,
-    upload_image_handler,
+    admin_handler, admin_pet_image_handler, admin_pet_upload_view, admin_pet_view,
+    create_pet_handler, delete_pet_post, delete_pet_view, update_pet_handler, upload_image_handler,
 };
 use csrf::validate_csrf;
 use middleware::{AnimalDomain, admin_base_domain_only};
@@ -347,7 +347,15 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
         .route("/admin/pets", axum::routing::post(create_pet_handler))
         .route(
             "/admin/pets/{name}",
-            axum::routing::post(update_pet_handler),
+            axum::routing::get(admin_pet_view).post(update_pet_handler),
+        )
+        .route(
+            "/admin/pets/{name}/status/{status_code}",
+            axum::routing::get(admin_pet_upload_view),
+        )
+        .route(
+            "/admin/pets/{name}/images/{status_code}",
+            axum::routing::get(admin_pet_image_handler),
         )
         .route(
             "/admin/pets/{name}/delete",
@@ -813,7 +821,69 @@ mod tests {
         let response = app.oneshot(request).await.expect("send request");
         let body = read_body(response).await;
         assert!(body.contains("httpet admin"));
+        assert!(body.contains("href=\"/admin/pets/fox\""));
         assert!(body.contains(&format!("fox.{}", TEST_BASE_DOMAIN)));
+    }
+
+    #[tokio::test]
+    async fn admin_pet_page_lists_available_missing_and_unknown() {
+        let (state, app) = get_test_app().await;
+
+        state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+
+        let status_map = crate::status_codes::status_codes().expect("load status codes");
+        let mut codes = status_map.keys().copied();
+        let available_code = codes.next().expect("status code");
+        let missing_code = codes
+            .find(|code| *code != available_code)
+            .expect("missing code");
+
+        state.write_test_image("dog", available_code);
+        let extra_path = state.image_dir.join("dog/999.jpg");
+        std::fs::write(&extra_path, [0xFF, 0xD8, 0xFF, 0xD9]).expect("write extra image");
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/pets/dog")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        let body = read_body(response).await;
+        assert!(body.contains(&format!(
+            "/admin/pets/dog/images/{available_code}"
+        )));
+        assert!(body.contains(&format!(
+            "/admin/pets/dog/status/{missing_code}"
+        )));
+        assert!(body.contains("999.jpg"));
+    }
+
+    #[tokio::test]
+    async fn admin_upload_page_includes_status_summary_and_mdn_link() {
+        let (state, app) = get_test_app().await;
+
+        state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+
+        let status_map = crate::status_codes::status_codes().expect("load status codes");
+        let (code, info) = status_map.iter().next().expect("status code");
+
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/admin/pets/dog/status/{}", code))
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        let body = read_body(response).await;
+        assert!(body.contains(&info.summary));
+        assert!(body.contains(&info.mdn_url));
     }
 
     #[tokio::test]
