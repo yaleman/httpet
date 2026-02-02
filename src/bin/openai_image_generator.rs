@@ -3,22 +3,19 @@ use base64::Engine;
 use base64::engine::general_purpose;
 use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
 const INSTRUCTIONS: &str = r#"We are making images of animals depicting HTTP status codes. They should be entertaining and witty. 
 
-The images *must* be square. 
-
 When generating dogs, they must be Maltese terriers, Poodles or Pomeranian’s. 
 
 Cats? I prefer Blue Burmese or pure white cats with blue eyes. 
 
 Puffins are cool birds. 
-
-When I say “next one” make whatever is next numerically in the list that we haven’t made yet. Your choice, just tell me what it is, and include the number somewhere subtle in the image."#;
+"#;
 
 #[derive(Parser, Debug)]
 #[command(name = "openai_image_generator")]
@@ -38,31 +35,22 @@ struct Args {
     model: String,
 
     /// Quality: low / medium / high / auto
-    #[arg(long, value_enum, default_value_t = Quality::Auto)]
+    #[arg(long, value_enum, default_value_t = Quality::Hd)]
     quality: Quality,
 
     /// OpenAI API Key
-    #[arg(required = true, long, env = "OPENAI_API_KEY")]
+    #[arg(required = true, long, env = "OPENAI_API_KEY", hide_env_values = true)]
     openai_api_key: String,
 }
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
+#[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
 enum Quality {
     Auto,
     Low,
     Medium,
     High,
-}
-
-impl Quality {
-    fn as_api_str(self) -> &'static str {
-        match self {
-            Quality::Auto => "auto",
-            Quality::Low => "low",
-            Quality::Medium => "medium",
-            Quality::High => "high",
-        }
-    }
+    Hd,
 }
 
 /// Request body for POST /v1/images/generations
@@ -73,20 +61,28 @@ struct ImagesGenerateRequest<'a> {
     prompt: &'a str,
     n: u8,
     size: &'a str,
-    quality: &'a str,
-    output_format: &'a str,
+    quality: Quality,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<&'a str>,
 }
 
 /// Response shape shown in the docs for GPT image models (base64 output)
 /// Docs show: { created, data: [{ b64_json }], usage: ... }
 #[derive(Deserialize, Debug)]
-struct ImagesGenerateResponse {
+#[allow(dead_code)]
+pub struct ImagesGenerateResponse {
+    #[serde(default)]
+    created: u64,
     data: Vec<ImageData>,
+    #[serde(default)]
+    usage: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Deserialize, Debug)]
-struct ImageData {
-    b64_json: String,
+pub struct ImageData {
+    b64_json: Option<String>,
+    url: Option<String>,
+    revised_prompt: Option<String>,
 }
 
 fn load_status_codes() -> Result<Vec<u16>> {
@@ -151,7 +147,7 @@ fn build_prompt(code: u16, animal: &str) -> String {
     // Include the code subtly (badge, jersey number, tiny label, etc.)
     let prompt = format!(
         r#"
-Square, 1:1 composition. Create a funny, witty illustration that personifies HTTP status code {code}.
+Square, 1:1 composition. Create a funny, witty image that personifies HTTP status code {code}. It shoudl be 
 Subject: {animal}
 
 Scene requirements:
@@ -217,9 +213,18 @@ async fn main() -> Result<()> {
         prompt: &prompt,
         n: 1,
         size: "1024x1024",
-        quality: args.quality.as_api_str(),
-        output_format: "png",
+        quality: args.quality,
+        response_format: (args.model == "dall-e-2" || args.model == "dall-e-3")
+            .then_some("b64_json"),
     };
+
+    eprintln!(
+        "Requesting image: animal={animal}, code={status_code}, model={}, size={}, quality={:?}, output={}",
+        args.model,
+        req_body.size,
+        args.quality,
+        output_filename.display()
+    );
 
     let client = reqwest::Client::new();
     let resp = client
@@ -236,10 +241,16 @@ async fn main() -> Result<()> {
         return Err(anyhow!("OpenAI API error {status}: {body}"));
     }
 
-    let parsed: ImagesGenerateResponse = resp
-        .json()
+    let response_bytes = resp
+        .bytes()
         .await
-        .context("Failed to parse OpenAI Images API response JSON")?;
+        .context("Failed to read OpenAI Images API response bytes")?;
+
+    // write them to disk for debugging
+    fs::write("debug_image_response.json", &response_bytes)?;
+
+    let parsed: ImagesGenerateResponse = serde_json::from_slice(&response_bytes)
+        .context("Failed to parse OpenAI Images API response JSON, it was saved to debug_image_response.json")?;
 
     let first = parsed
         .data
@@ -247,9 +258,27 @@ async fn main() -> Result<()> {
         .next()
         .ok_or_else(|| anyhow!("No image data returned"))?;
 
-    let png_bytes = general_purpose::STANDARD
-        .decode(first.b64_json)
-        .context("Failed to base64-decode image")?;
+    let png_bytes = if let Some(b64_json) = first.b64_json {
+        general_purpose::STANDARD
+            .decode(b64_json)
+            .context("Failed to base64-decode image")?
+    } else if let Some(url) = first.url {
+        let bytes = client
+            .get(url)
+            .send()
+            .await
+            .context("Failed to download image URL")?
+            .bytes()
+            .await
+            .context("Failed to read image bytes")?;
+        bytes.to_vec()
+    } else {
+        return Err(anyhow!("Image response missing b64_json and url fields"));
+    };
+
+    if let Some(revised_prompt) = first.revised_prompt {
+        eprintln!("Revised prompt from OpenAI: {}", revised_prompt);
+    }
 
     fs::write(&output_filename, &png_bytes)
         .with_context(|| format!("Failed to write image to {}", output_filename.display()))?;
