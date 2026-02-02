@@ -80,6 +80,8 @@ pub(crate) struct AdminUploadTemplate {
     status_name: String,
     status_summary: String,
     status_mdn_url: String,
+    has_existing: bool,
+    existing_image_url: String,
     csrf_token: String,
     has_flash: bool,
     flash_message: String,
@@ -254,6 +256,13 @@ pub(crate) async fn admin_pet_upload_view(
         return Err(HttpetError::NotFound(path.status_code.to_string()));
     };
 
+    let image_path = state.image_path(&pet_name, path.status_code);
+    let has_existing = match tokio::fs::metadata(&image_path).await {
+        Ok(metadata) => metadata.is_file(),
+        Err(err) if err.kind() == ErrorKind::NotFound => false,
+        Err(err) => return Err(HttpetError::InternalServerError(err.to_string())),
+    };
+
     let csrf_token = csrf_token(&session).await?;
     let flash = flash::take_flash_message(&session).await?;
     let (has_flash, flash_message, flash_class) = match flash {
@@ -262,11 +271,13 @@ pub(crate) async fn admin_pet_upload_view(
     };
 
     Ok(AdminUploadTemplate {
-        pet_name,
+        pet_name: pet_name.clone(),
         status_code: path.status_code,
         status_name: info.name.clone(),
         status_summary: info.summary.clone(),
         status_mdn_url: info.mdn_url.clone(),
+        has_existing,
+        existing_image_url: format!("/admin/pets/{}/images/{}", pet_name, path.status_code),
         csrf_token,
         has_flash,
         flash_message,
@@ -381,6 +392,7 @@ pub(crate) async fn upload_image_handler(
     let mut image_bytes: Option<Vec<u8>> = None;
     let mut csrf_token_value: Option<String> = None;
     let mut redirect_to: Option<String> = None;
+    let mut overwrite: bool = false;
 
     while let Some(field) = multipart
         .next_field()
@@ -428,6 +440,9 @@ pub(crate) async fn upload_image_handler(
                     .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
                 redirect_to = Some(value);
             }
+            "overwrite" => {
+                overwrite = true;
+            }
             _ => {}
         }
     }
@@ -453,6 +468,18 @@ pub(crate) async fn upload_image_handler(
         .await
         .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
     let image_path = pet_dir.join(format!("{status_code}.jpg"));
+    let exists = match tokio::fs::metadata(&image_path).await {
+        Ok(metadata) => metadata.is_file(),
+        Err(err) if err.kind() == ErrorKind::NotFound => false,
+        Err(err) => return Err(HttpetError::InternalServerError(err.to_string())),
+    };
+    if exists && !overwrite {
+        flash::set_flash(&session, flash::FLASH_OVERWRITE_REQUIRED).await?;
+        return Ok(Redirect::to(&format!(
+            "/admin/pets/{}/status/{}",
+            pet_name, status_code
+        )));
+    }
     tokio::fs::write(&image_path, image_bytes)
         .await
         .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;

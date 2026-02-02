@@ -21,15 +21,25 @@
         <h2>Upload {{ pet_name }}/{{ status_code }}: {{ status_name }}</h2>
         <p class="status-summary">{{ status_summary }}</p>
         <a class="status-link" href="{{ status_mdn_url }}">[MDN]</a>
+        {% if has_existing %}
+        <p class="notice warning">An image already exists for this status.</p>
+        <p><a class="status-link" href="{{ existing_image_url }}">View current image</a></p>
+        {% endif %}
         <form method="post" action="/admin/images" enctype="multipart/form-data">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="pet" value="{{ pet_name }}">
           <input type="hidden" name="status_code" value="{{ status_code }}">
           <input type="hidden" name="redirect_to" value="/admin/pets/{{ pet_name }}">
           <label>
-            JPEG image
-            <input type="file" name="image" accept="image/jpeg" required>
+            Upload image (JPEG or PNG)
+            <input type="file" name="image" accept="image/jpeg,image/png" required>
           </label>
+          {% if has_existing %}
+          <label>
+            <input type="checkbox" name="overwrite">
+            Overwrite existing image
+          </label>
+          {% endif %}
           <div class="form-actions">
             <button type="submit">Upload image</button>
             <a class="button-link" href="/admin/pets/{{ pet_name }}">Back to status list</a>

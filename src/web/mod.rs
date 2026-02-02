@@ -1255,6 +1255,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_upload_requires_overwrite_confirmation() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+        state.write_test_image("dog", 201);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let (body, cookie) = read_body_and_cookie(response).await;
+        let csrf_token = extract_csrf_token(&body);
+        let cookie = cookie.expect("missing session cookie");
+
+        let jpeg_bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/images/dog/100.jpg"
+        ))
+        .to_vec();
+
+        let boundary = "boundary789";
+        let body = multipart_body(
+            boundary,
+            vec![
+                ("pet", b"dog".to_vec(), None),
+                ("status_code", b"201".to_vec(), None),
+                ("csrf_token", csrf_token.clone().into_bytes(), None),
+                ("image", jpeg_bytes.clone(), Some("dog.jpg")),
+            ],
+        );
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/admin/images")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
+            .header(
+                CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .expect("missing location header")
+            .to_str()
+            .expect("invalid location header");
+        assert!(location.ends_with("/admin/pets/dog/status/201"));
+
+        let original_bytes = tokio::fs::read(state.image_dir.join("dog/201.jpg"))
+            .await
+            .expect("read existing image");
+
+        let boundary = "boundary790";
+        let body = multipart_body(
+            boundary,
+            vec![
+                ("pet", b"dog".to_vec(), None),
+                ("status_code", b"201".to_vec(), None),
+                ("csrf_token", csrf_token.into_bytes(), None),
+                ("overwrite", b"on".to_vec(), None),
+                ("image", jpeg_bytes, Some("dog.jpg")),
+            ],
+        );
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/admin/images")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
+            .header(
+                CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let new_bytes = tokio::fs::read(state.image_dir.join("dog/201.jpg"))
+            .await
+            .expect("read overwritten image");
+        assert_ne!(original_bytes, new_bytes);
+    }
+
+    #[tokio::test]
     async fn admin_delete_requires_image_confirmation() {
         let (state, app) = get_test_app().await;
         state
