@@ -307,7 +307,8 @@ input[type="text"] {
 }
 
 button,
-.button-link {
+.button-link,
+a.button-link {
 	background: var(--primary);
 	color: var(--primary-text);
 	display: inline-flex;
@@ -319,9 +320,10 @@ button,
 	text-decoration: none;
 }
 
-.button-link:hover {
+.button-link:hover,
+a.button-link:hover {
 	background: #cbd5f5;
-	color: #0f172a;
+	color: var(--base-text);
 }
 
 .danger {

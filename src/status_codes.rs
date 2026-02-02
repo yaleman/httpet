@@ -9,6 +9,7 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::OnceLock;
 
 /// MDN reference URL for HTTP status codes.
@@ -86,15 +87,15 @@ pub fn status_codes() -> Result<&'static BTreeMap<u16, StatusInfo>, StatusCodesE
 
 /// Fetches the MDN status code reference page.
 pub fn fetch_status_page() -> anyhow::Result<String> {
-    let response = ureq::get(MDN_STATUS_URL)
-        .set(
-            USER_AGENT.as_ref(),
+    let mut response = ureq::get(MDN_STATUS_URL)
+        .header(
+            axum::http::HeaderName::from_str(USER_AGENT.as_ref())?,
             &format!("Httpet.org {}", env!("CARGO_PKG_VERSION")),
         )
         .call()
         .context("Failed to fetch MDN status code reference page")?;
-    response
-        .into_string()
+    let body = response.body_mut();
+    body.read_to_string()
         .context("Failed to read MDN response body")
 }
 
@@ -142,10 +143,7 @@ pub fn parse_status_entries(page_html: &str) -> anyhow::Result<Vec<(u16, String,
         let stripped = tag_re.replace_all(paragraph, "");
         let summary = decode_html_entities(stripped.trim()).to_string();
         let name = decode_html_entities(name).to_string();
-        let name = name
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
         let code_num: u16 = code
             .parse()
             .with_context(|| format!("Invalid status code {code}"))?;
