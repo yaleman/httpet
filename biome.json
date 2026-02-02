@@ -1,7 +1,11 @@
 {
+	"html": {
+		"parser": {
+			"interpolation": false
+		}
+	},
 	"overrides": [
 		{
-			"include": ["templates/**/*.html"],
 			"formatter": { "enabled": true },
 			"linter": { "enabled": true }
 		}

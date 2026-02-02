@@ -45,5 +45,13 @@ run = "cargo clippy --all-targets --all-features --quiet"
 description = "Run semgrep"
 run = "just semgrep"
 
+[tasks.biome]
+description = "Run biome lint"
+run = '''
+biome check static/*.css
+biome check templates/*.html
+'''
+
 [tools]
+biome = "latest"
 semgrep = "latest"
