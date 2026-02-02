@@ -853,12 +853,8 @@ mod tests {
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
         let body = read_body(response).await;
-        assert!(body.contains(&format!(
-            "/admin/pets/dog/images/{available_code}"
-        )));
-        assert!(body.contains(&format!(
-            "/admin/pets/dog/status/{missing_code}"
-        )));
+        assert!(body.contains(&format!("/admin/pets/dog/images/{available_code}")));
+        assert!(body.contains(&format!("/admin/pets/dog/status/{missing_code}")));
         assert!(body.contains("999.jpg"));
     }
 
@@ -1136,13 +1132,15 @@ mod tests {
         let mut cookie = cookie.expect("missing session cookie");
 
         let boundary = "boundary123";
+        let jpeg_bytes =
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/images/dog/100.jpg")).to_vec();
         let body = multipart_body(
             boundary,
             vec![
                 ("pet", b"dog".to_vec(), None),
                 ("status_code", b"201".to_vec(), None),
                 ("csrf_token", csrf_token.into_bytes(), None),
-                ("image", vec![0xFF, 0xD8, 0xFF, 0xD9], Some("dog.jpg")),
+                ("image", jpeg_bytes, Some("dog.jpg")),
             ],
         );
 
@@ -1190,6 +1188,70 @@ mod tests {
             .await
             .expect("uploaded file metadata");
         assert!(metadata.is_file());
+    }
+
+    #[tokio::test]
+    async fn admin_upload_converts_png_to_jpeg() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let (body, cookie) = read_body_and_cookie(response).await;
+        let csrf_token = extract_csrf_token(&body);
+        let cookie = cookie.expect("missing session cookie");
+
+        let image = image::RgbImage::from_fn(1, 1, |_, _| image::Rgb([255, 0, 0]));
+        let mut png_bytes = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+        image::ImageEncoder::write_image(
+            encoder,
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgb8,
+        )
+        .expect("encode png");
+
+        let boundary = "boundary456";
+        let body = multipart_body(
+            boundary,
+            vec![
+                ("pet", b"dog".to_vec(), None),
+                ("status_code", b"202".to_vec(), None),
+                ("csrf_token", csrf_token.into_bytes(), None),
+                ("image", png_bytes, Some("dog.png")),
+            ],
+        );
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/admin/images")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
+            .header(
+                CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let image_path = state.image_dir.join("dog/202.jpg");
+        let bytes = tokio::fs::read(&image_path)
+            .await
+            .expect("read converted image");
+        let format = image::guess_format(&bytes).expect("guess format");
+        assert_eq!(format, image::ImageFormat::Jpeg);
     }
 
     #[tokio::test]

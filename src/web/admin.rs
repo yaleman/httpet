@@ -439,9 +439,7 @@ pub(crate) async fn upload_image_handler(
     let image_bytes = image_bytes.ok_or(HttpetError::BadRequest)?;
     let csrf_token_value = csrf_token_value.ok_or(HttpetError::BadRequest)?;
     validate_csrf(&session, &csrf_token_value).await?;
-    if !is_valid_jpeg(&image_bytes) {
-        return Err(HttpetError::BadRequest);
-    }
+    let image_bytes = normalize_image_to_jpeg(&image_bytes)?;
 
     let pet_exists = pets::Entity::find_by_name(state.db.as_ref(), &pet_name)
         .await?
@@ -500,27 +498,35 @@ pub(crate) async fn delete_pet_post(
     Ok(Redirect::to("/admin/"))
 }
 
-/// validates if an image is a valid JPEG file
-fn is_valid_jpeg(bytes: &[u8]) -> bool {
+/// Ensures image bytes are a valid JPEG, converting if possible.
+fn normalize_image_to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, HttpetError> {
     if bytes.len() < 4 {
-        debug!("JPEG is too short");
-        return false;
+        debug!("Image is too short");
+        return Err(HttpetError::BadRequest);
     }
-    if !bytes.starts_with(&[0xFF, 0xD8]) && bytes.ends_with(&[0xFF, 0xD9]) {
-        debug!("JPEG does not have valid start/end markers");
-        return false;
+
+    let reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|err| {
+            debug!("Failed to guess image format: {}", err);
+            HttpetError::BadRequest
+        })?;
+    let format = reader.format();
+    let image = reader.decode().map_err(|err| {
+        debug!("Failed to decode image: {}", err);
+        HttpetError::BadRequest
+    })?;
+
+    if format == Some(image::ImageFormat::Jpeg) {
+        return Ok(bytes.to_vec());
     }
-    if let Ok(image) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() {
-        if image.format() != Some(image::ImageFormat::Jpeg) {
-            debug!("Image format is not JPEG");
-            false
-        } else {
-            true
-        }
-    } else {
-        debug!("Failed to read image for format checking");
-        false
-    }
+
+    let mut output = Vec::new();
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut output);
+    encoder
+        .encode_image(&image)
+        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
+    Ok(output)
 }
 
 /// zips the dates and votes into a series of vote counts
@@ -619,15 +625,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_valid_jpeg() {
+    fn test_normalize_image_to_jpeg() {
         use crate::config::setup_logging;
         let _ = setup_logging(true);
-        assert!(is_valid_jpeg(include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/images/dog/100.jpg"
-        ))));
-        assert!(!is_valid_jpeg(&[]));
-        assert!(!is_valid_jpeg(&[0xFF, 0xD8, 0x00, 0xFF, 0xD9]));
-        assert!(!is_valid_jpeg(b"This is not a JPEG file."));
+        let jpeg_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/images/dog/100.jpg"));
+        let normalized = normalize_image_to_jpeg(jpeg_bytes).expect("normalize jpeg");
+        assert_eq!(normalized, jpeg_bytes);
+        assert!(normalize_image_to_jpeg(&[]).is_err());
+        assert!(normalize_image_to_jpeg(&[0xFF, 0xD8, 0x00, 0xFF, 0xD9]).is_err());
+        assert!(normalize_image_to_jpeg(b"This is not a JPEG file.").is_err());
     }
 }
