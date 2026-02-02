@@ -13,3 +13,6 @@ pub const X_HTTPET_ANIMAL: &str = "x-httpet-animal";
 #[cfg(test)]
 /// Base domain used in tests
 pub const TEST_BASE_DOMAIN: &str = "example.org";
+
+/// Length of CSRF session tokens
+pub const CSRF_SESSION_LENGTH: i64 = 300;

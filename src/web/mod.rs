@@ -4,7 +4,7 @@ use std::path::{Path as StdPath, PathBuf};
 use std::str::FromStr;
 
 use crate::cli::CliOptions;
-use crate::constants::{IMAGE_DIR, X_HTTPET_ANIMAL};
+use crate::constants::{CSRF_SESSION_LENGTH, IMAGE_DIR, X_HTTPET_ANIMAL};
 use crate::db::entities::pets;
 use axum::Router;
 use rand::prelude::IndexedRandom;
@@ -19,6 +19,7 @@ use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 
 mod admin;
 mod csrf;
+mod flash;
 mod middleware;
 mod prelude;
 mod views;
@@ -338,7 +339,7 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
     let secure_cookies = state.listen_port == 443 || url.scheme() == "https";
     info!("Using secure cookies: {}", secure_cookies);
     let session_layer = SessionManagerLayer::new(MemoryStore::default())
-        .with_expiry(Expiry::OnInactivity(Duration::seconds(60)))
+        .with_expiry(Expiry::OnInactivity(Duration::seconds(CSRF_SESSION_LENGTH)))
         .with_secure(secure_cookies)
         .with_always_save(true);
     Ok(Router::new()
@@ -467,15 +468,14 @@ mod tests {
             .map(|pet| pet.name)
             .collect();
         let image_dir = tempfile::tempdir().expect("create temp image dir");
-        let app_state = AppState::new(
+        AppState::new(
             TEST_BASE_DOMAIN,
             None,
             enabled,
             db,
             image_dir.path().to_path_buf(),
             0,
-        );
-        app_state
+        )
     }
 
     async fn read_body(response: axum::response::Response) -> String {
@@ -583,7 +583,7 @@ mod tests {
             .header("host", &format!("dog.{}", TEST_BASE_DOMAIN))
             .body(Body::empty())
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
 
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         let location = response
@@ -651,7 +651,7 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -1032,7 +1032,7 @@ mod tests {
         let response = app.clone().oneshot(request).await.expect("send request");
         let (body, cookie) = read_body_and_cookie(response).await;
         let csrf_token = extract_csrf_token(&body);
-        let cookie = cookie.expect("missing session cookie");
+        let mut cookie = cookie.expect("missing session cookie");
 
         let boundary = "boundary123";
         let body = multipart_body(
@@ -1056,8 +1056,33 @@ mod tests {
             )
             .body(Body::from(body))
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let (body, new_cookie) = read_body_and_cookie(response).await;
+        if let Some(new_cookie) = new_cookie {
+            cookie = new_cookie;
+        }
+        assert!(body.contains("Upload successful"));
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        let body = read_body(response).await;
+        assert!(!body.contains("Upload successful"));
 
         let image_path = state.image_dir.join("dog/201.jpg");
         let metadata = tokio::fs::metadata(&image_path)

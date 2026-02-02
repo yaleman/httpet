@@ -14,8 +14,8 @@
 #![deny(clippy::unreachable)]
 #![deny(clippy::unwrap_used)]
 #![deny(warnings)]
-#![forbid(unsafe_code)]
 #![deny(missing_docs)]
+#![forbid(unsafe_code)]
 
 pub mod cli;
 pub mod config;

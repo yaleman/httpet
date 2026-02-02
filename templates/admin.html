@@ -12,6 +12,11 @@
       <p>Votes over the last 30 days and pet configuration.</p>
     </header>
     <main>
+      {% if has_flash %}
+      <section class="card notice {{ flash_class }}">
+        <p>{{ flash_message }}</p>
+      </section>
+      {% endif %}
       <section class="card">
         <h2>Add a pet</h2>
         <form method="post" action="/admin/pets">

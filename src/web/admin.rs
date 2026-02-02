@@ -1,5 +1,6 @@
-use super::prelude::*;
 use super::csrf::{csrf_token, validate_csrf};
+use super::flash;
+use super::prelude::*;
 use crate::db::entities::{pets, votes};
 use axum::extract::{Form, Multipart, Path, State};
 use axum::response::Redirect;
@@ -36,6 +37,9 @@ pub(crate) struct AdminTemplate {
     has_pets: bool,
     state: AppState,
     csrf_token: String,
+    has_flash: bool,
+    flash_message: String,
+    flash_class: String,
 }
 
 pub(crate) async fn admin_handler(
@@ -84,6 +88,11 @@ pub(crate) async fn admin_handler(
     let end_label = date_labels.last().map(format_date).unwrap_or_default();
 
     let csrf_token = csrf_token(&session).await?;
+    let flash = flash::take_flash_message(&session).await?;
+    let (has_flash, flash_message, flash_class) = match flash {
+        Some(message) => (true, message.text.to_string(), message.class.to_string()),
+        None => (false, String::new(), String::new()),
+    };
     Ok(AdminTemplate {
         has_pets: !pets.is_empty(),
         pets,
@@ -91,6 +100,9 @@ pub(crate) async fn admin_handler(
         end_label,
         state,
         csrf_token,
+        has_flash,
+        flash_message,
+        flash_class,
     })
 }
 
@@ -158,9 +170,7 @@ pub(crate) async fn upload_image_handler(
                     .text()
                     .await
                     .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
-                let parsed = code
-                    .parse::<u16>()
-                    .map_err(|_| HttpetError::BadRequest)?;
+                let parsed = code.parse::<u16>().map_err(|_| HttpetError::BadRequest)?;
                 if !(100..=599).contains(&parsed) {
                     return Err(HttpetError::BadRequest);
                 }
@@ -177,7 +187,9 @@ pub(crate) async fn upload_image_handler(
         }
     }
 
-    let pet_name = pet_name.filter(|name| !name.is_empty()).ok_or(HttpetError::BadRequest)?;
+    let pet_name = pet_name
+        .filter(|name| !name.is_empty())
+        .ok_or(HttpetError::BadRequest)?;
     let status_code = status_code.ok_or(HttpetError::BadRequest)?;
     let image_bytes = image_bytes.ok_or(HttpetError::BadRequest)?;
     let csrf_token_value = csrf_token_value.ok_or(HttpetError::BadRequest)?;
@@ -202,6 +214,7 @@ pub(crate) async fn upload_image_handler(
         .await
         .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
 
+    flash::set_flash(&session, flash::FLASH_UPLOAD_SUCCESS).await?;
     Ok(Redirect::to("/admin/"))
 }
 

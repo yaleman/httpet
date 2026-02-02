@@ -1,5 +1,5 @@
-use super::prelude::*;
 use super::csrf;
+use super::prelude::*;
 use crate::{
     db::entities::{pets, votes},
     status_codes,
@@ -57,11 +57,7 @@ pub(crate) async fn pet_status_list(
     pet: &str,
     status_link_prefix: &str,
 ) -> Result<Response, HttpetError> {
-    let enabled = state
-        .enabled_pets
-        .read()
-        .await
-        .contains(&pet.to_string());
+    let enabled = state.enabled_pets.read().await.contains(&pet.to_string());
     if !enabled {
         return Err(HttpetError::NeedsVote(state.base_url(), pet.to_string()));
     }

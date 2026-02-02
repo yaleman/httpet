@@ -24,7 +24,7 @@
 - `just run`: wrapper for `cargo run`.
 - `just test`: preferred test runner (wraps `cargo test`).
 - `just check`: run codespell, clippy, tests, and markdown formatting checks.
-  - Always run `just check` and ensure it passes before considering work complete.
+- *Always* run `just check` and ensure it passes before considering work complete.
 
 ## Coding Style & Naming Conventions
 

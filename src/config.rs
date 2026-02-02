@@ -10,11 +10,12 @@ pub fn setup_logging(debug: bool) -> Result<(), Box<std::io::Error>> {
         LevelFilter::Info
     };
 
-    simple_logger::SimpleLogger::new()
-        .with_level(level)
-        .init()
-        .map_err(|err| {
-            eprintln!("Failed to initialize logger: {}", err);
-            Box::new(std::io::Error::other(err))
-        })
+    let mut logger = simple_logger::SimpleLogger::new().with_level(level);
+    if !debug {
+        logger = logger.with_module_level("tracing", LevelFilter::Warn);
+    }
+    logger.init().map_err(|err| {
+        eprintln!("Failed to initialize logger: {}", err);
+        Box::new(std::io::Error::other(err))
+    })
 }

@@ -79,7 +79,7 @@ codespell:
 
 # Ask the clip for the judgement
 clippy:
-    cargo clippy --all-features --quiet
+    cargo clippy --all-targets --all-features --quiet
 
 test:
     cargo test  --quiet
