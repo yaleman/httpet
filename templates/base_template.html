@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>{% block title %}{% endblock title %}httpet</title>
+        <link rel="stylesheet" href="/static/styles.css">
+    </head>
+    <body>
+        <header>
+            <h1>httpet</h1>
+            <p>{% block subtitle %}{% endblock subtitle %}</p>
+        </header>
+        <main>
+            {% block content %}{% endblock content %}
+        </main>
+    </body>
+</html>

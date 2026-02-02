@@ -7,6 +7,7 @@ use crate::cli::CliOptions;
 use crate::constants::{CSRF_SESSION_LENGTH, IMAGE_DIR, X_HTTPET_ANIMAL};
 use crate::db::entities::pets;
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use rand::prelude::IndexedRandom;
 use sea_orm::{DatabaseTransaction, IntoActiveModel, TransactionTrait};
 use serde::Deserialize;
@@ -389,7 +390,8 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
         .route("/{segment}/", axum::routing::get(pet_or_status_handler))
         .route("/{segment}", axum::routing::get(pet_or_status_handler))
         .nest_service("/static", axum::routing::get_service(static_service))
-        .layer(session_layer))
+        .layer(session_layer)
+        .layer(DefaultBodyLimit::max(4096 * 1024 * 1024)))
 }
 
 pub(crate) fn normalize_pet_name(name: &str) -> String {
@@ -1292,11 +1294,8 @@ mod tests {
         let csrf_token = extract_csrf_token(&body);
         let cookie = cookie.expect("missing session cookie");
 
-        let jpeg_bytes = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/images/dog/100.jpg"
-        ))
-        .to_vec();
+        let jpeg_bytes =
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/images/dog/100.jpg")).to_vec();
 
         let boundary = "boundary789";
         let body = multipart_body(

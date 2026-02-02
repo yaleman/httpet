@@ -1,69 +1,58 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ pet_name }} - httpet admin</title>
-    <link rel="stylesheet" href="/static/styles.css">
-  </head>
-  <body>
-    <header>
-      <h1><a href="/">httpet</a> admin</h1>
-      <p>Manage status images for {{ pet_name }}.</p>
-    </header>
-    <main>
-      {% if has_flash %}
-      <section class="card notice {{ flash_class }}">
-        <p>{{ flash_message }}</p>
-      </section>
+{% extends "admin_base.html" %}
+{% block title %}{{ pet_name }} - {{ super() }}{% endblock %}
+{% block subtitle %}Manage status images for {{ pet_name }}.{% endblock %}
+{% block content %}
+
+{% if has_flash %}
+<section class="card notice {{ flash_class }}">
+  <p>{{ flash_message }}</p>
+</section>
+{% endif %}
+<section class="card">
+  <div class="pet-header">
+    <h2>{{ pet_name }}</h2>
+    <div class="pet-actions">
+      <a class="button-link" href="/admin/">Back to admin</a>
+      <a class="button-link" href="{{ public_url }}">Public page</a>
+    </div>
+  </div>
+  <p>Click a missing code to upload an image for that status.</p>
+  <div class="status-lists">
+    <div class="status-panel">
+      <h3>Available status codes</h3>
+      {% if available_codes.len() == 0 %}
+      <p>No status images found yet.</p>
+      {% else %}
+      <div class="code-grid">
+        {% for code in available_codes %}
+        <a class="code-pill" href="/admin/pets/{{ pet_name }}/images/{{ code }}">{{ code }}</a>
+        {% endfor %}
+      </div>
       {% endif %}
-      <section class="card">
-        <div class="pet-header">
-          <h2>{{ pet_name }}</h2>
-          <div class="pet-actions">
-            <a class="button-link" href="/admin/">Back to admin</a>
-            <a class="button-link" href="{{ public_url }}">Public page</a>
-          </div>
-        </div>
-        <p>Click a missing code to upload an image for that status.</p>
-        <div class="status-lists">
-          <div class="status-panel">
-            <h3>Available status codes</h3>
-            {% if available_codes.len() == 0 %}
-            <p>No status images found yet.</p>
-            {% else %}
-            <div class="code-grid">
-              {% for code in available_codes %}
-              <a class="code-pill" href="/admin/pets/{{ pet_name }}/images/{{ code }}">{{ code }}</a>
-              {% endfor %}
-            </div>
-            {% endif %}
-          </div>
-          <div class="status-panel">
-            <h3>Missing status codes</h3>
-            {% if missing_codes.len() == 0 %}
-            <p>All known status codes are covered.</p>
-            {% else %}
-            <div class="code-grid">
-              {% for code in missing_codes %}
-              <a class="code-pill missing" href="/admin/pets/{{ pet_name }}/status/{{ code }}">{{ code }}</a>
-              {% endfor %}
-            </div>
-            {% endif %}
-          </div>
-        </div>
-      </section>
-      {% if has_unknown_files %}
-      <section class="card">
-        <h2>Unrecognized images</h2>
-        <p>These files don't match the known status code list.</p>
-        <ul class="file-list">
-          {% for file in unknown_files %}
-          <li>{{ file }}</li>
-          {% endfor %}
-        </ul>
-      </section>
+    </div>
+    <div class="status-panel">
+      <h3>Missing status codes</h3>
+      {% if missing_codes.len() == 0 %}
+      <p>All known status codes are covered.</p>
+      {% else %}
+      <div class="code-grid">
+        {% for code in missing_codes %}
+        <a class="code-pill missing" href="/admin/pets/{{ pet_name }}/status/{{ code }}">{{ code }}</a>
+        {% endfor %}
+      </div>
       {% endif %}
-    </main>
-  </body>
-</html>
+    </div>
+  </div>
+</section>
+{% if has_unknown_files %}
+<section class="card">
+  <h2>Unrecognized images</h2>
+  <p>These files don't match the known status code list.</p>
+  <ul class="file-list">
+    {% for file in unknown_files %}
+    <li>{{ file }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock content %}

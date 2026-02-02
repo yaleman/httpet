@@ -1,107 +1,94 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>httpet admin</title>
-    <link rel="stylesheet" href="/static/styles.css">
-  </head>
-  <body>
-    <header>
-      <h1><a href="/">httpet</a> admin</h1>
-      <p>Votes over the last 30 days and pet configuration.</p>
-    </header>
-    <main>
-      {% if has_flash %}
-      <section class="card notice {{ flash_class }}">
-        <p>{{ flash_message }}</p>
-      </section>
-      {% endif %}
-      {% if has_orphan_pets %}
-      <section class="card">
-        <h2>Image folders without pets</h2>
-        <p>We found image folders on disk that don’t have a matching pet yet.</p>
-        <div class="grid">
-          {% for pet_name in orphan_pets %}
-          <form method="post" action="/admin/pets">
-            <input type="hidden" name="name" value="{{ pet_name }}">
-            <label><input type="checkbox" name="enabled" checked> Enabled</label>
-            <button type="submit">Create {{ pet_name }}</button>
-          </form>
-          {% endfor %}
-        </div>
-      </section>
-      {% endif %}
-      <section class="card">
-        <h2>Add a pet</h2>
-        <form method="post" action="/admin/pets">
-          <label>
-            Name
-            <input type="text" name="name" placeholder="dog">
-          </label>
-          <label><input type="checkbox" name="enabled" checked> Enabled</label>
-          <button type="submit">Add pet</button>
-        </form>
-      </section>
-      <section class="card">
-        <h2>Upload a status image</h2>
-        {% if has_pets %}
-        <form method="post" action="/admin/images" enctype="multipart/form-data">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <label>
-            Pet
-            <select name="pet">
-              {% for pet in pets %}
-              <option value="{{ pet.name }}">{{ pet.name }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          <label>
-            Status code
-            <input type="number" name="status_code" min="100" max="599" placeholder="404" required>
-          </label>
-          <label>
-            JPEG image
-            <input type="file" name="image" accept="image/jpeg" required>
-          </label>
-          <button type="submit">Upload image</button>
-        </form>
-        {% else %}
-        <p>Add a pet first to upload status images.</p>
-        {% endif %}
-      </section>
-      {% if !has_pets %}
-      <section class="card">
-        <p>No pets found yet. Visit a pet subdomain or add one to start tracking.</p>
-      </section>
-      {% endif %}
-      <section class="pet-grid">
+{% extends "admin_base.html" %}
+{% block subtitle %}Votes over the last 30 days and pet configuration.{% endblock %}
+{% block content %}
+{% if has_flash %}
+<section class="card notice {{ flash_class }}">
+  <p>{{ flash_message }}</p>
+</section>
+{% endif %}
+{% if has_orphan_pets %}
+<section class="card">
+  <h2>Image folders without pets</h2>
+  <p>We found image folders on disk that don’t have a matching pet yet.</p>
+  <div class="grid">
+    {% for pet_name in orphan_pets %}
+    <form method="post" action="/admin/pets">
+      <input type="hidden" name="name" value="{{ pet_name }}">
+      <label><input type="checkbox" name="enabled" checked> Enabled</label>
+      <button type="submit">Create {{ pet_name }}</button>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+<section class="card">
+  <h2>Add a pet</h2>
+  <form method="post" action="/admin/pets">
+    <label>
+      Name
+      <input type="text" name="name" placeholder="dog">
+    </label>
+    <label><input type="checkbox" name="enabled" checked> Enabled</label>
+    <button type="submit">Add pet</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Upload a status image</h2>
+  {% if has_pets %}
+  <form method="post" action="/admin/images" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      Pet
+      <select name="pet">
         {% for pet in pets %}
-        <section class="card">
-          <div class="pet-header">
-            <div>
-              <h2><a href="/admin/pets/{{ pet.name }}">{{ pet.name }}</a></h2>
-            </div>
-            <span class="pill{% if pet.enabled %} enabled{% endif %}">{% if pet.enabled %}enabled{% else %}disabled{% endif %}</span>
-          </div>
-          {% if !pet.enabled %}
-          {{ pet.chart_svg|safe }}
-          <div class="axis-labels">
-            <span>{{ start_label }}</span>
-            <span>{{ end_label }}</span>
-          </div>
-          {% endif %}
-          <div class="pet-actions">
-            <form method="post" action="/admin/pets/{{ pet.name }}">
-              <label><input type="checkbox" name="enabled" {% if pet.enabled %}checked{% endif %}> Enabled</label>
-              <button type="submit">Save</button>
-            </form>
-            <a class="button-link" href="{{ state.pet_base_url(pet.name) }}">Public page</a>
-            <a class="button-link danger" href="/admin/pets/{{ pet.name }}/delete">Delete pet</a>
-          </div>
-        </section>
+        <option value="{{ pet.name }}">{{ pet.name }}</option>
         {% endfor %}
-      </section>
-    </main>
-  </body>
-</html>
+      </select>
+    </label>
+    <label>
+      Status code
+      <input type="number" name="status_code" min="100" max="599" placeholder="404" required>
+    </label>
+    <label>
+      JPEG image
+      <input type="file" name="image" accept="image/jpeg" required>
+    </label>
+    <button type="submit">Upload image</button>
+  </form>
+  {% else %}
+  <p>Add a pet first to upload status images.</p>
+  {% endif %}
+</section>
+{% if !has_pets %}
+<section class="card">
+  <p>No pets found yet. Visit a pet subdomain or add one to start tracking.</p>
+</section>
+{% endif %}
+<section class="pet-grid">
+  {% for pet in pets %}
+  <section class="card">
+    <div class="pet-header">
+      <div>
+        <h2><a href="/admin/pets/{{ pet.name }}">{{ pet.name }}</a></h2>
+      </div>
+      <span class="pill{% if pet.enabled %} enabled{% endif %}">{% if pet.enabled %}enabled{% else %}disabled{% endif %}</span>
+    </div>
+    {% if !pet.enabled %}
+    {{ pet.chart_svg|safe }}
+    <div class="axis-labels">
+      <span>{{ start_label }}</span>
+      <span>{{ end_label }}</span>
+    </div>
+    {% endif %}
+    <div class="pet-actions">
+      <form method="post" action="/admin/pets/{{ pet.name }}">
+        <label><input type="checkbox" name="enabled" {% if pet.enabled %}checked{% endif %}> Enabled</label>
+        <button type="submit">Save</button>
+      </form>
+      <a class="button-link" href="{{ state.pet_base_url(pet.name) }}">Public page</a>
+      <a class="button-link danger" href="/admin/pets/{{ pet.name }}/delete">Delete pet</a>
+    </div>
+  </section>
+  {% endfor %}
+</section>
+{% endblock content %}
