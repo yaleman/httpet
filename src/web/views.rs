@@ -15,12 +15,14 @@ use tokio::fs;
 pub(crate) struct VotePageTemplate {
     pub(crate) name: String,
     pub(crate) csrf_token: String,
+    pub(crate) frontend_url: String,
 }
 
 #[derive(Template, WebTemplate)]
 #[template(path = "vote_thanks.html")]
 pub(crate) struct VoteThanksTemplate {
     pub(crate) name: String,
+    pub(crate) frontend_url: String,
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +46,7 @@ pub(crate) struct HomeTemplate {
     pub(crate) top_pets: Vec<TopPet>,
     pub(crate) state: AppState,
     pub(crate) csrf_token: String,
+    pub(crate) frontend_url: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -51,6 +54,14 @@ pub(crate) struct HomeTemplate {
 pub(crate) struct NotFoundTemplate {
     pub(crate) has_image: bool,
     pub(crate) image_url: String,
+    pub(crate) frontend_url: String,
+}
+
+#[derive(Template, WebTemplate)]
+#[template(path = "about.html")]
+pub(crate) struct AboutTemplate {
+    pub(crate) frontend_url: String,
+    pub(crate) pet_example_url: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -60,6 +71,7 @@ pub(crate) struct StatusListTemplate {
     pub(crate) status_codes: Vec<StatusCodeEntry>,
     pub(crate) base_domain: String,
     pub(crate) info_link_prefix: String,
+    pub(crate) frontend_url: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -71,6 +83,7 @@ pub(crate) struct StatusInfoTemplate {
     pub(crate) status_summary: String,
     pub(crate) mdn_url: String,
     pub(crate) image_url: String,
+    pub(crate) frontend_url: String,
 }
 
 #[derive(Deserialize)]
@@ -108,6 +121,7 @@ pub(crate) async fn pet_status_list(state: AppState, pet: &str) -> Result<Respon
         status_codes: status_entries,
         base_domain: state.base_domain.clone(),
         info_link_prefix: format!("/info/{}", pet),
+        frontend_url: frontend_url_for_state(&state),
     }
     .into_response())
 }
@@ -151,6 +165,7 @@ pub(crate) async fn status_info_view(
         status_summary: status_info.summary.clone(),
         mdn_url: status_info.mdn_url.clone(),
         image_url: format!("/{}/{}", pet, path.status_code),
+        frontend_url: frontend_url_for_state(&state),
     }
     .into_response())
 }
@@ -161,10 +176,19 @@ pub(crate) async fn not_found_response(state: &AppState) -> Response {
     let mut response = NotFoundTemplate {
         has_image,
         image_url: image_url.unwrap_or_default(),
+        frontend_url: frontend_url_for_state(state),
     }
     .into_response();
     *response.status_mut() = StatusCode::NOT_FOUND;
     response
+}
+
+pub(crate) async fn about_view(State(state): State<AppState>) -> Result<Response, HttpetError> {
+    Ok(AboutTemplate {
+        frontend_url: frontend_url_for_state(&state),
+        pet_example_url: state.pet_base_url("dog"),
+    }
+    .into_response())
 }
 
 /// handles the / GET
@@ -220,8 +244,21 @@ pub(crate) async fn root_handler(
         top_pets,
         state: state.clone(),
         csrf_token,
+        frontend_url: frontend_url_for_state(&state),
     }
     .into_response())
+}
+
+pub(crate) fn frontend_url_for_state(state: &AppState) -> String {
+    if let Some(url) = state.frontend_url.as_ref() {
+        url.to_string().trim_end_matches('/').to_string()
+    } else if state.listen_port == 443 {
+        format!("https://{}", state.base_domain)
+    } else if state.listen_port == 80 {
+        format!("http://{}", state.base_domain)
+    } else {
+        format!("http://{}:{}", state.base_domain, state.listen_port)
+    }
 }
 
 async fn random_404_image_url(state: &AppState) -> Option<String> {

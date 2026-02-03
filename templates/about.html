@@ -1,0 +1,32 @@
+{% extends "base_template.html" %}
+
+{% block title %}About - {{ super() }}{% endblock title %}
+{% block subtitle %}What httpet is and how to use it.{% endblock subtitle %}
+
+{% block content %}
+<section class="card">
+  <h2>What is httpet?</h2>
+  <p>httpet serves friendly, themed images for HTTP status codes.</p>
+  <p>Each pet gets its own subdomain and image set.</p>
+</section>
+
+<section class="card">
+  <h2>How to use it</h2>
+  <p>Pick a pet and a status code:</p>
+  <p><strong>Subdomain:</strong> <a href="{{ pet_example_url }}/404"><code>{{ pet_example_url }}/404</code></a></p>
+  <p><strong>Path:</strong> <a href="{{ frontend_url }}/dog/404"><code>{{ frontend_url }}/dog/404</code></a></p>
+  <p><strong>Info:</strong> <a href="{{ frontend_url }}/info/dog/404"><code>{{ frontend_url }}/info/dog/404</code></a></p>
+  <p>Use the homepage to see available pets and status codes.</p>
+</section>
+
+<section class="card">
+  <h2>Vote for new pets</h2>
+  <p>Have a pet you want to see? Vote for it on the homepage.</p>
+  <p>Votes are tallied daily to decide what gets added next.</p>
+</section>
+
+<section class="card">
+  <h2>About</h2>
+  <p>Made by <a href="https://yaleman.org">yaleman</a>.</p>
+</section>
+{% endblock content %}

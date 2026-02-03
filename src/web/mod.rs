@@ -299,18 +299,25 @@ async fn vote_pet_handler(
     validate_csrf(&session, &form.csrf_token).await?;
     let name = normalize_pet_name_strict(&name)?;
     record_vote(&state.db, &name).await?;
-    Ok(VoteThanksTemplate { name: name.clone() })
+    Ok(VoteThanksTemplate {
+        name: name.clone(),
+        frontend_url: views::frontend_url_for_state(&state),
+    })
 }
 
 /// View for voting page
 async fn vote_pet_view(
-    State(_appstate): State<AppState>,
+    State(state): State<AppState>,
     session: Session,
     Path(name): Path<String>,
 ) -> Result<VotePageTemplate, HttpetError> {
     let csrf_token = csrf::csrf_token(&session).await?;
     let name = normalize_pet_name_strict(&name)?;
-    Ok(VotePageTemplate { name, csrf_token })
+    Ok(VotePageTemplate {
+        name,
+        csrf_token,
+        frontend_url: views::frontend_url_for_state(&state),
+    })
 }
 
 #[derive(Deserialize)]
@@ -332,7 +339,10 @@ async fn vote_form_handler(
     validate_csrf(&session, &form.csrf_token).await?;
     let name = normalize_pet_name_strict(&form.name)?;
     record_vote(&state.db, &name).await?;
-    Ok(VoteThanksTemplate { name })
+    Ok(VoteThanksTemplate {
+        name,
+        frontend_url: views::frontend_url_for_state(&state),
+    })
 }
 
 /// is it a pet, or is it a status code? who knows.
@@ -402,6 +412,7 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
     Ok(Router::new()
         .merge(admin_routes)
         .route("/", axum::routing::get(views::root_handler))
+        .route("/about", axum::routing::get(views::about_view))
         .route(
             "/info/{pet}/{status_code}",
             axum::routing::get(views::status_info_view),
@@ -896,6 +907,25 @@ mod tests {
 
         assert!(body.contains("Not Found - httpet"));
         assert!(body.contains("/dog/404"));
+    }
+
+    #[tokio::test]
+    async fn about_page_mentions_yaleman() {
+        let (_state, app) = get_test_app().await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/about")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_body(response).await;
+
+        assert!(body.contains("yaleman.org"));
+        assert!(body.contains("About - httpet"));
+        assert!(body.contains("/info/dog/404"));
     }
 
     #[tokio::test]
