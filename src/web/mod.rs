@@ -8,6 +8,7 @@ use crate::constants::{CSRF_SESSION_LENGTH, IMAGE_DIR, X_HTTPET_ANIMAL};
 use crate::db::entities::pets;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use axum::http::HeaderMap;
 use rand::prelude::IndexedRandom;
 use sea_orm::{DatabaseTransaction, IntoActiveModel, TransactionTrait};
 use serde::Deserialize;
@@ -21,6 +22,7 @@ use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 mod admin;
 mod csrf;
 mod flash;
+mod images;
 mod middleware;
 mod prelude;
 mod views;
@@ -32,6 +34,7 @@ use admin::{
     create_pet_handler, delete_pet_post, delete_pet_view, update_pet_handler, upload_image_handler,
 };
 use csrf::validate_csrf;
+use images::{ImageCacheHeaders, apply_cache_headers, is_not_modified, not_modified_response};
 use middleware::{AnimalDomain, admin_base_domain_only};
 use url::Url;
 use views::{VotePageTemplate, VoteThanksTemplate};
@@ -174,10 +177,11 @@ impl AppState {
 async fn get_status_handler(
     domain: AnimalDomain,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(status_code): Path<u16>,
 ) -> Result<axum::response::Response, HttpetError> {
     if let Some(animal) = domain.animal.as_deref() {
-        return pet_status_response(&state, animal, status_code).await;
+        return pet_status_response(&state, animal, status_code, &headers).await;
     }
 
     // return a random animal image for the root domain
@@ -218,13 +222,14 @@ async fn get_status_handler(
         }
     };
 
-    pet_status_response(&state, &animal, status_code).await
+    pet_status_response(&state, &animal, status_code, &headers).await
 }
 
 async fn pet_status_response(
     state: &AppState,
     animal: &str,
     status_code: u16,
+    request_headers: &HeaderMap,
 ) -> Result<axum::response::Response, HttpetError> {
     let enabled = state
         .enabled_pets
@@ -235,6 +240,27 @@ async fn pet_status_response(
         return Err(HttpetError::NeedsVote(state.base_url(), animal.to_string()));
     }
     let image_path = state.image_path(animal, status_code);
+    let metadata = match tokio::fs::metadata(&image_path).await {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(HttpetError::NotFound(format!(
+                "{}",
+                json!({"animal": animal, "status_code": status_code})
+            )));
+        }
+        Err(err) => {
+            error!(
+                "Failed to read image metadata for {}: {}",
+                image_path.display(),
+                err
+            );
+            return Err(HttpetError::InternalServerError(err.to_string()));
+        }
+    };
+    let cache_headers = ImageCacheHeaders::from_metadata(&metadata);
+    if is_not_modified(request_headers, &cache_headers) {
+        return not_modified_response(&cache_headers);
+    }
     let mut builder = axum::response::Response::builder();
     match tokio::fs::read(&image_path).await {
         Ok(bytes) => {
@@ -242,6 +268,7 @@ async fn pet_status_response(
                 builder = builder.header(X_HTTPET_ANIMAL, value);
             }
             builder = builder.header(CONTENT_TYPE, "image/jpeg");
+            builder = apply_cache_headers(builder, &cache_headers);
             builder
                 .body(axum::body::Body::from(bytes))
                 .map_err(HttpetError::from)
@@ -316,10 +343,11 @@ async fn vote_form_handler(
 async fn pet_or_status_handler(
     domain: AnimalDomain,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(segment): Path<String>,
 ) -> Result<axum::response::Response, HttpetError> {
     if let Ok(status_code) = segment.parse::<u16>() {
-        return get_status_handler(domain, State(state), Path(status_code)).await;
+        return get_status_handler(domain, State(state), headers, Path(status_code)).await;
     }
 
     let pet = normalize_pet_name(&segment);
@@ -335,10 +363,11 @@ struct PetStatusPath {
 
 async fn pet_status_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(path): Path<PetStatusPath>,
 ) -> Result<axum::response::Response, HttpetError> {
     let pet = normalize_pet_name(&path.pet);
-    pet_status_response(&state, &pet, path.status_code).await
+    pet_status_response(&state, &pet, path.status_code, &headers).await
 }
 
 fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
@@ -463,7 +492,7 @@ pub async fn setup_server(
 #[cfg(test)]
 mod tests {
     use crate::config::setup_logging;
-    use crate::constants::{TEST_BASE_DOMAIN, X_HTTPET_ANIMAL};
+    use crate::constants::{IMAGE_CACHE_CONTROL, TEST_BASE_DOMAIN, X_HTTPET_ANIMAL};
     use crate::db::entities::votes;
 
     use super::*;
@@ -471,7 +500,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{
         Request,
-        header::{CONTENT_TYPE, SET_COOKIE},
+        header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LAST_MODIFIED, SET_COOKIE},
     };
     use http_body_util::BodyExt;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -645,7 +674,11 @@ mod tests {
             .header("host", &format!("dog.{}", TEST_BASE_DOMAIN))
             .body(Body::empty())
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("send request");
 
         assert_eq!(
             response.status(),
@@ -771,7 +804,11 @@ mod tests {
             .header("cookie", &cookie)
             .body(Body::from(format!("name=lynx&csrf_token={csrf_token}")))
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("send request");
         assert_eq!(response.status(), StatusCode::OK);
 
         let pet = pets::Entity::find()
@@ -820,7 +857,11 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("send request");
         let body = read_body(response).await;
         assert!(body.contains("httpet admin"));
         assert!(body.contains("href=\"/admin/pets/fox\""));
@@ -839,7 +880,11 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("send request");
         let body = read_body(response).await;
         assert!(body.contains("Image folders without pets"));
         assert!(body.contains("Create badger"));
@@ -871,7 +916,11 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("send request");
         let body = read_body(response).await;
         assert!(body.contains(&format!("/admin/pets/dog/images/{available_code}")));
         assert!(body.contains(&format!("/admin/pets/dog/status/{missing_code}")));
@@ -896,7 +945,11 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("send request");
         let body = read_body(response).await;
         assert!(body.contains(&info.name));
         assert!(body.contains(&info.summary));
@@ -1059,7 +1112,11 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("send request");
 
         assert_eq!(
             response.status(),
@@ -1079,8 +1136,102 @@ mod tests {
                 .expect("missing header"),
             "image/jpeg"
         );
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .expect("missing header"),
+            IMAGE_CACHE_CONTROL.as_str()
+        );
+        assert!(
+            response.headers().get(ETAG).is_some(),
+            "missing etag header"
+        );
+        assert!(
+            response.headers().get(LAST_MODIFIED).is_some(),
+            "missing last-modified header"
+        );
         let body = read_body(response).await;
         assert!(!body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn path_status_returns_not_modified_with_etag() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+        state.write_test_image("dog", 200);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/dog/200")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("send request");
+        let etag = response
+            .headers()
+            .get(ETAG)
+            .expect("missing etag header")
+            .to_str()
+            .expect("etag header value")
+            .to_string();
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/dog/200")
+            .header("host", TEST_BASE_DOMAIN)
+            .header(IF_NONE_MATCH, etag)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .expect("missing header"),
+            IMAGE_CACHE_CONTROL.as_str()
+        );
+        let body = read_body(response).await;
+        assert!(body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn admin_image_includes_cache_headers() {
+        let (state, app) = get_test_app().await;
+        state.write_test_image("dog", 200);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/pets/dog/images/200")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .expect("missing header"),
+            IMAGE_CACHE_CONTROL.as_str()
+        );
+        assert!(
+            response.headers().get(ETAG).is_some(),
+            "missing etag header"
+        );
+        assert!(
+            response.headers().get(LAST_MODIFIED).is_some(),
+            "missing last-modified header"
+        );
     }
 
     #[tokio::test]

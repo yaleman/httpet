@@ -1,10 +1,12 @@
 use super::csrf::{csrf_token, validate_csrf};
 use super::flash;
+use super::images::{ImageCacheHeaders, apply_cache_headers, is_not_modified, not_modified_response};
 use super::prelude::*;
 use crate::constants::X_HTTPET_ANIMAL;
 use crate::db::entities::{pets, votes};
 use crate::status_codes;
 use axum::extract::{Form, Multipart, Path, State};
+use axum::http::HeaderMap;
 use axum::response::{Redirect, Response};
 use chrono::{Duration, NaiveDate, Utc};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
@@ -305,6 +307,7 @@ pub(crate) async fn admin_pet_upload_view(
 
 pub(crate) async fn admin_pet_image_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(path): Path<PetStatusPath>,
 ) -> Result<Response, HttpetError> {
     let pet_name = normalize_pet_name(&path.name);
@@ -316,6 +319,20 @@ pub(crate) async fn admin_pet_image_handler(
     }
 
     let image_path = state.image_path(&pet_name, path.status_code);
+    let metadata = match tokio::fs::metadata(&image_path).await {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            return Err(HttpetError::NotFound(format!(
+                "{} {}",
+                pet_name, path.status_code
+            )));
+        }
+        Err(err) => return Err(HttpetError::InternalServerError(err.to_string())),
+    };
+    let cache_headers = ImageCacheHeaders::from_metadata(&metadata);
+    if is_not_modified(&headers, &cache_headers) {
+        return not_modified_response(&cache_headers);
+    }
     let mut builder = Response::builder();
     match tokio::fs::read(&image_path).await {
         Ok(bytes) => {
@@ -323,6 +340,7 @@ pub(crate) async fn admin_pet_image_handler(
                 builder = builder.header(X_HTTPET_ANIMAL, value);
             }
             builder = builder.header(CONTENT_TYPE, "image/jpeg");
+            builder = apply_cache_headers(builder, &cache_headers);
             builder
                 .body(axum::body::Body::from(bytes))
                 .map_err(HttpetError::from)

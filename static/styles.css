@@ -203,7 +203,7 @@ ul.pet-list li.pet {
 	min-width: 20vw;
 	text-align: center;
 	padding: 1rem;
-	border-radius: 999px;
+	border-radius: 1.5rem;
 	font-size: 2rem;
 	background: #e2e8f0;
 	color: #334155;
@@ -260,7 +260,7 @@ form {
 	justify-content: center;
 	min-width: 4rem;
 	padding: 0.5rem 1rem;
-	border-radius: 999px;
+	border-radius: 1.5rem;
 	background: #e2e8f0;
 	color: var(--base-text);
 	font-weight: 600;
