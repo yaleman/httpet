@@ -407,6 +407,10 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
     Ok(Router::new()
         .merge(admin_routes)
         .route("/", axum::routing::get(views::root_handler))
+        .route(
+            "/info/{pet}/{status_code}",
+            axum::routing::get(views::status_info_view),
+        )
         .route("/vote", axum::routing::post(vote_form_handler))
         .route(
             "/vote/{name}",
@@ -502,6 +506,7 @@ mod tests {
         Request,
         header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LAST_MODIFIED, SET_COOKIE},
     };
+    use html_escape::decode_html_entities;
     use http_body_util::BodyExt;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
     use sea_orm_migration::MigratorTrait;
@@ -1232,6 +1237,32 @@ mod tests {
             response.headers().get(LAST_MODIFIED).is_some(),
             "missing last-modified header"
         );
+    }
+
+    #[tokio::test]
+    async fn info_page_shows_status_details() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+        state.write_test_image("dog", 200);
+        let info = crate::status_codes::status_info(200).expect("status info");
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/info/dog/200")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response).await;
+        assert!(body.contains(&info.name));
+        let decoded_body = decode_html_entities(&body);
+        assert!(decoded_body.contains(&info.summary));
+        assert!(body.contains("/dog/200"));
     }
 
     #[tokio::test]

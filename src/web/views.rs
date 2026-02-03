@@ -6,6 +6,7 @@ use crate::{
     web::{middleware::AnimalDomain, status_codes_for},
 };
 use axum::response::Response;
+use serde_json::json;
 
 #[derive(Template, WebTemplate)]
 #[template(path = "vote_page.html")]
@@ -52,6 +53,23 @@ pub(crate) struct StatusListTemplate {
     pub(crate) status_link_prefix: String,
 }
 
+#[derive(Template, WebTemplate)]
+#[template(path = "status_info.html")]
+pub(crate) struct StatusInfoTemplate {
+    pub(crate) pet_name: String,
+    pub(crate) status_code: u16,
+    pub(crate) status_name: String,
+    pub(crate) status_summary: String,
+    pub(crate) mdn_url: String,
+    pub(crate) image_url: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct InfoPath {
+    pub(crate) pet: String,
+    pub(crate) status_code: u16,
+}
+
 pub(crate) async fn pet_status_list(
     state: AppState,
     pet: &str,
@@ -85,6 +103,55 @@ pub(crate) async fn pet_status_list(
         status_codes: status_entries,
         base_domain: state.base_domain.clone(),
         status_link_prefix: status_link_prefix.to_string(),
+    }
+    .into_response())
+}
+
+pub(crate) async fn status_info_view(
+    State(state): State<AppState>,
+    Path(path): Path<InfoPath>,
+) -> Result<Response, HttpetError> {
+    let pet = normalize_pet_name(&path.pet);
+    if pet.is_empty() {
+        return Err(HttpetError::BadRequest);
+    }
+    if !(100..=599).contains(&path.status_code) {
+        return Err(HttpetError::BadRequest);
+    }
+
+    let enabled = state.enabled_pets.read().await.contains(&pet);
+    if !enabled {
+        return Err(HttpetError::NeedsVote(state.base_url(), pet));
+    }
+
+    let image_path = state.image_path(&pet, path.status_code);
+    match tokio::fs::metadata(&image_path).await {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(HttpetError::NotFound(format!(
+                "{}",
+                json!({"animal": pet, "status_code": path.status_code})
+            )));
+        }
+        Err(err) => {
+            return Err(HttpetError::InternalServerError(err.to_string()));
+        }
+    }
+
+    let status_info = status_codes::status_info(path.status_code).ok_or_else(|| {
+        HttpetError::NotFound(format!(
+            "{}",
+            json!({"status_code": path.status_code})
+        ))
+    })?;
+
+    Ok(StatusInfoTemplate {
+        pet_name: pet.clone(),
+        status_code: path.status_code,
+        status_name: status_info.name.clone(),
+        status_summary: status_info.summary.clone(),
+        mdn_url: status_info.mdn_url.clone(),
+        image_url: format!("/{}/{}", pet, path.status_code),
     }
     .into_response())
 }
