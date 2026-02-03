@@ -6,6 +6,7 @@ use crate::{
     web::{middleware::AnimalDomain, status_codes_for},
 };
 use axum::response::{Redirect, Response};
+use base64::Engine;
 use rand::prelude::IndexedRandom;
 use serde_json::json;
 use tokio::fs;
@@ -83,11 +84,19 @@ pub(crate) struct StatusInfoTemplate {
     pub(crate) status_summary: String,
     pub(crate) mdn_url: String,
     pub(crate) image_url: String,
+    pub(crate) page_url: String,
+    pub(crate) preview_image_url: String,
     pub(crate) frontend_url: String,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct InfoPath {
+    pub(crate) pet: String,
+    pub(crate) status_code: u16,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PreviewPath {
     pub(crate) pet: String,
     pub(crate) status_code: u16,
 }
@@ -189,6 +198,26 @@ pub(crate) async fn info_shortcut_handler(
     Ok(Redirect::to(&frontend_url_for_state(&state)).into_response())
 }
 
+pub(crate) async fn preview_image_handler(
+    State(state): State<AppState>,
+    Path(path): Path<PreviewPath>,
+) -> Result<Response, HttpetError> {
+    let pet = normalize_pet_name_strict(&path.pet)?;
+    preview_image_response(state, pet, path.status_code).await
+}
+
+pub(crate) async fn preview_image_handler_subdomain(
+    domain: AnimalDomain,
+    State(state): State<AppState>,
+    Path(status_code): Path<u16>,
+) -> Result<Response, HttpetError> {
+    let Some(pet) = domain.animal else {
+        return Err(HttpetError::BadRequest);
+    };
+    let pet = normalize_pet_name_strict(&pet)?;
+    preview_image_response(state, pet, status_code).await
+}
+
 async fn status_info_response(
     state: AppState,
     pet: String,
@@ -217,6 +246,8 @@ async fn status_info_response(
         HttpetError::NotFound(format!("{}", json!({"status_code": status_code})))
     })?;
 
+    let frontend_url = frontend_url_for_state(&state);
+
     Ok(StatusInfoTemplate {
         pet_name: pet.clone(),
         status_code,
@@ -224,9 +255,101 @@ async fn status_info_response(
         status_summary: status_info.summary.clone(),
         mdn_url: status_info.mdn_url.clone(),
         image_url: format!("/{}/{}", pet, status_code),
-        frontend_url: frontend_url_for_state(&state),
+        page_url: format!("{}/info/{}/{}", frontend_url, pet, status_code),
+        preview_image_url: format!("{}/preview/{}/{}", frontend_url, pet, status_code),
+        frontend_url,
     }
     .into_response())
+}
+
+async fn preview_image_response(
+    state: AppState,
+    pet: String,
+    status_code: u16,
+) -> Result<Response, HttpetError> {
+    if !(100..=599).contains(&status_code) {
+        return Err(HttpetError::BadRequest);
+    }
+    let enabled = state.enabled_pets.read().await.contains(&pet);
+    if !enabled {
+        return Err(HttpetError::NeedsVote(state.base_url(), pet));
+    }
+
+    let image_path = state.image_path(&pet, status_code);
+    let image_bytes = match fs::read(&image_path).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(HttpetError::NotFound(format!(
+                "{}",
+                json!({"animal": pet, "status_code": status_code})
+            )));
+        }
+        Err(err) => return Err(HttpetError::InternalServerError(err.to_string())),
+    };
+
+    let status_info = status_codes::status_info(status_code).ok_or_else(|| {
+        HttpetError::NotFound(format!("{}", json!({"status_code": status_code})))
+    })?;
+
+    let image_base64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
+    let image_href = format!("data:image/jpeg;base64,{}", image_base64);
+    let status_name = html_escape::encode_text(&status_info.name);
+
+    let width = 1200;
+    let height = 630;
+    let padding = 60;
+    let pill_radius = 48;
+    let image_size = 420;
+    let image_radius = 36;
+    let image_x = padding + 40;
+    let image_y = (height - image_size) / 2;
+    let gap = 60;
+    let right_start = image_x + image_size + gap;
+    let right_width = width - right_start - padding - 40;
+    let text_center_x = right_start + right_width / 2;
+    let code_box_width = right_width;
+    let code_box_height = 120;
+    let code_box_x = right_start;
+    let code_box_y = 200;
+    let code_y = code_box_y + (code_box_height / 2) + 10;
+    let name_box_width = right_width;
+    let name_box_height = 90;
+    let name_box_x = right_start;
+    let name_box_y = code_box_y + code_box_height + 30;
+    let name_y = name_box_y + (name_box_height / 2) + 4;
+
+    let svg = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <defs>
+    <linearGradient id="primary-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#681dd8d8"/>
+      <stop offset="100%" stop-color="#ab79e0"/>
+    </linearGradient>
+    <clipPath id="image-clip">
+      <rect x="{image_x}" y="{image_y}" width="{image_size}" height="{image_size}" rx="{image_radius}"/>
+    </clipPath>
+  </defs>
+  <rect x="{padding}" y="{padding}" width="{width_minus_padding}" height="{height_minus_padding}" rx="{pill_radius}" fill="url(#primary-gradient)"/>
+  <rect x="{image_x}" y="{image_y}" width="{image_size}" height="{image_size}" rx="{image_radius}" fill="#ffffff" stroke="#e7e0ff" stroke-width="2"/>
+  <image x="{image_x}" y="{image_y}" width="{image_size}" height="{image_size}" preserveAspectRatio="xMidYMid meet" href="{image_href}" clip-path="url(#image-clip)"/>
+  <rect x="{code_box_x}" y="{code_box_y}" width="{code_box_width}" height="{code_box_height}" rx="28" fill="#ffffff" stroke="#e7e0ff" stroke-width="2"/>
+  <text x="{text_center_x}" y="{code_y}" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="96" font-weight="700" fill="#2b145a">{status_code}</text>
+  <rect x="{name_box_x}" y="{name_box_y}" width="{name_box_width}" height="{name_box_height}" rx="24" fill="#ffffff" stroke="#e7e0ff" stroke-width="2"/>
+  <text x="{text_center_x}" y="{name_y}" text-anchor="middle" dominant-baseline="middle" font-family="system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="44" font-weight="600" fill="#5a3b8a">{status_name}</text>
+</svg>
+"##,
+        width_minus_padding = width - (padding * 2),
+        height_minus_padding = height - (padding * 2),
+    );
+
+    let mut response = Response::new(axum::body::Body::from(svg));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("image/svg+xml"),
+    );
+    Ok(response)
 }
 
 async fn random_pet_with_status(

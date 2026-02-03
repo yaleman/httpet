@@ -425,6 +425,14 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
             axum::routing::get(views::status_info_view_subdomain),
         )
         .route(
+            "/preview/{pet}/{status_code}",
+            axum::routing::get(views::preview_image_handler),
+        )
+        .route(
+            "/preview/{status_code}",
+            axum::routing::get(views::preview_image_handler_subdomain),
+        )
+        .route(
             "/{status_code}/info",
             axum::routing::get(views::info_shortcut_handler),
         )
@@ -1394,6 +1402,61 @@ mod tests {
             .to_str()
             .expect("invalid location header");
         assert!(location.contains(TEST_BASE_DOMAIN));
+    }
+
+    #[tokio::test]
+    async fn preview_image_returns_svg() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
+            .await
+            .expect("create pet");
+        state.write_test_image("dog", 200);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/preview/dog/200")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .expect("missing content-type"),
+            "image/svg+xml"
+        );
+        let body = read_body(response).await;
+        assert!(body.contains("<svg"));
+        assert!(body.contains("200"));
+    }
+
+    #[tokio::test]
+    async fn preview_image_subdomain_returns_svg() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
+            .await
+            .expect("create pet");
+        state.write_test_image("dog", 200);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/preview/200")
+            .header("host", &format!("dog.{}", TEST_BASE_DOMAIN))
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(CONTENT_TYPE)
+                .expect("missing content-type"),
+            "image/svg+xml"
+        );
     }
 
     #[tokio::test]

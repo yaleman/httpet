@@ -2,6 +2,17 @@
 
 {% block title %}HTTP/{{ status_code }}, with {{ pet_name }}s.- {{ super() }}{% endblock title %}
 {% block subtitle %}HTTP/{{ status_code }}, brought to you by {{ pet_name }}s.{% endblock subtitle %}
+{% block head_extra %}
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="{{ page_url }}">
+  <meta property="og:title" content="HTTP/{{ status_code }} {{ status_name }}">
+  <meta property="og:description" content="{{ status_summary }}">
+  <meta property="og:image" content="{{ preview_image_url }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="HTTP/{{ status_code }} {{ status_name }}">
+  <meta name="twitter:description" content="{{ status_summary }}">
+  <meta name="twitter:image" content="{{ preview_image_url }}">
+{% endblock head_extra %}
 
 {% block content %}
 
