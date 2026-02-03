@@ -13,7 +13,7 @@
     {% for status in status_codes %}
     <div class="status-card">
       <div class="status-code">
-        <a href="{{ status_link_prefix }}/{{ status.code }}"><strong>{{ status.code }}</strong></a>
+        <a href="{{ info_link_prefix }}/{{ status.code }}"><strong>{{ status.code }}</strong></a>
         <span class="status-name">{{ status.name }}</span>
       </div>
       <p class="status-summary">{{ status.summary }}</p>

@@ -351,8 +351,7 @@ async fn pet_or_status_handler(
     }
 
     let pet = normalize_pet_name(&segment);
-    let link_prefix = format!("/{}", pet);
-    views::pet_status_list(state, &pet, &link_prefix).await
+    views::pet_status_list(state, &pet).await
 }
 
 #[derive(Deserialize)]
@@ -679,11 +678,7 @@ mod tests {
             .header("host", &format!("dog.{}", TEST_BASE_DOMAIN))
             .body(Body::empty())
             .expect("create request");
-        let response = app
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
 
         assert_eq!(
             response.status(),
@@ -809,11 +804,7 @@ mod tests {
             .header("cookie", &cookie)
             .body(Body::from(format!("name=lynx&csrf_token={csrf_token}")))
             .expect("create request");
-        let response = app
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
         assert_eq!(response.status(), StatusCode::OK);
 
         let pet = pets::Entity::find()
@@ -862,11 +853,7 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
         let body = read_body(response).await;
         assert!(body.contains("httpet admin"));
         assert!(body.contains("href=\"/admin/pets/fox\""));
@@ -885,11 +872,7 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
         let body = read_body(response).await;
         assert!(body.contains("Image folders without pets"));
         assert!(body.contains("Create badger"));
@@ -921,11 +904,7 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
         let body = read_body(response).await;
         assert!(body.contains(&format!("/admin/pets/dog/images/{available_code}")));
         assert!(body.contains(&format!("/admin/pets/dog/status/{missing_code}")));
@@ -950,11 +929,7 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
         let body = read_body(response).await;
         assert!(body.contains(&info.name));
         assert!(body.contains(&info.summary));
@@ -1070,8 +1045,8 @@ mod tests {
         assert!(body.contains("httpet"));
         assert!(body.contains("404"));
         assert!(body.contains(&info.name));
-        assert!(body.contains("href=\"/404\""));
-        assert!(!body.contains("href=\"/dog/404\""));
+        assert!(body.contains("href=\"/info/dog/404\""));
+        assert!(!body.contains("href=\"/404\""));
     }
 
     #[tokio::test]
@@ -1098,8 +1073,8 @@ mod tests {
         assert!(body.contains("[MDN]"));
         assert!(body.contains("404"));
         assert!(body.contains(&info.name));
-        assert!(body.contains("href=\"/dog/404\""));
-        assert!(!body.contains("href=\"/404\""));
+        assert!(body.contains("href=\"/info/dog/404\""));
+        assert!(!body.contains("href=\"/dog/404\""));
     }
 
     #[tokio::test]
@@ -1117,11 +1092,7 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
 
         assert_eq!(
             response.status(),
@@ -1175,11 +1146,7 @@ mod tests {
             .header("host", TEST_BASE_DOMAIN)
             .body(Body::empty())
             .expect("create request");
-        let response = app
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
         let etag = response
             .headers()
             .get(ETAG)

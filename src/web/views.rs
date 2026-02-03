@@ -50,7 +50,7 @@ pub(crate) struct StatusListTemplate {
     pub(crate) name: String,
     pub(crate) status_codes: Vec<StatusCodeEntry>,
     pub(crate) base_domain: String,
-    pub(crate) status_link_prefix: String,
+    pub(crate) info_link_prefix: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -70,11 +70,7 @@ pub(crate) struct InfoPath {
     pub(crate) status_code: u16,
 }
 
-pub(crate) async fn pet_status_list(
-    state: AppState,
-    pet: &str,
-    status_link_prefix: &str,
-) -> Result<Response, HttpetError> {
+pub(crate) async fn pet_status_list(state: AppState, pet: &str) -> Result<Response, HttpetError> {
     let enabled = state.enabled_pets.read().await.contains(&pet.to_string());
     if !enabled {
         return Err(HttpetError::NeedsVote(state.base_url(), pet.to_string()));
@@ -102,7 +98,7 @@ pub(crate) async fn pet_status_list(
         name: pet.to_string(),
         status_codes: status_entries,
         base_domain: state.base_domain.clone(),
-        status_link_prefix: status_link_prefix.to_string(),
+        info_link_prefix: format!("/info/{}", pet),
     }
     .into_response())
 }
@@ -139,10 +135,7 @@ pub(crate) async fn status_info_view(
     }
 
     let status_info = status_codes::status_info(path.status_code).ok_or_else(|| {
-        HttpetError::NotFound(format!(
-            "{}",
-            json!({"status_code": path.status_code})
-        ))
+        HttpetError::NotFound(format!("{}", json!({"status_code": path.status_code})))
     })?;
 
     Ok(StatusInfoTemplate {
@@ -164,7 +157,7 @@ pub(crate) async fn root_handler(
 ) -> Result<Response, HttpetError> {
     // if it's a subdomain then handle that.
     if let Some(animal) = domain.animal.as_deref() {
-        return pet_status_list(state, animal, "").await;
+        return pet_status_list(state, animal).await;
     }
 
     let db = &state.db;
