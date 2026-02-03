@@ -182,6 +182,21 @@ ul.pet-list li.pet {
 	color: #475569;
 }
 
+.status-image-card {
+	justify-self: center;
+	max-width: 720px;
+	width: 100%;
+	display: grid;
+	justify-items: center;
+}
+
+.status-image {
+	max-width: 100%;
+	height: auto;
+	border-radius: 12px;
+	display: block;
+}
+
 .status-link {
 	font-size: 0.95rem;
 	color: var(--primary);

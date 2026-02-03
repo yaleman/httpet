@@ -1,0 +1,17 @@
+{% extends "base_template.html" %}
+
+{% block title %}HTTP/{{ status_code }}, with {{ pet_name }}s.- {{ super() }}{% endblock title %}
+{% block subtitle %}HTTP/{{ status_code }}, brought to you by {{ pet_name }}s.{% endblock subtitle %}
+
+{% block content %}
+
+<section class="card">
+  <h2>{{ status_code }} {{ status_name }}</h2>
+  <p class="status-summary">{{ status_summary }}</p>
+  <a class="status-link" href="{{ mdn_url }}">[MDN]</a>
+</section>
+
+<section class="card status-image-card">
+  <img class="status-image" src="{{ image_url }}" alt="{{ pet_name }} {{ status_code }}">
+</section>
+{% endblock content %}
