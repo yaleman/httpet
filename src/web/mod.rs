@@ -1009,7 +1009,7 @@ mod tests {
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
         let body = read_body(response).await;
-        assert!(body.contains("Part of the"));
+        assert!(body.contains("httpet"));
         assert!(body.contains("404"));
         assert!(body.contains(&info.name));
         assert!(body.contains("href=\"/404\""));
@@ -1036,8 +1036,8 @@ mod tests {
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
         let body = read_body(response).await;
-        assert!(body.contains("Part of the"));
-        assert!(body.contains("MDN"));
+        assert!(body.contains("httpet"));
+        assert!(body.contains("[MDN]"));
         assert!(body.contains("404"));
         assert!(body.contains(&info.name));
         assert!(body.contains("href=\"/dog/404\""));
