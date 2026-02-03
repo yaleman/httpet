@@ -11,21 +11,23 @@ use axum::extract::{Form, Multipart, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Redirect, Response};
 use chrono::{Duration, NaiveDate, Utc};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::sea_query::{Alias, Expr, Query};
+use sea_orm::{ColumnTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, StatementBuilder};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, ErrorKind};
 use std::path::Path as StdPath;
+use std::str::FromStr;
 use tracing::{debug, instrument};
 
 #[derive(Deserialize)]
 pub(crate) struct PetUpdateForm {
-    enabled: Option<String>,
+    status: String,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct PetCreateForm {
     name: String,
-    enabled: Option<String>,
+    status: String,
 }
 
 #[derive(Deserialize)]
@@ -43,8 +45,11 @@ pub(crate) struct PetStatusPath {
 #[derive(Clone, Debug)]
 struct AdminPetView {
     name: String,
-    enabled: bool,
+    status_label: String,
+    status_class: String,
+    is_enabled: bool,
     chart_svg: String,
+    vote_total: i64,
 }
 
 #[derive(Template, WebTemplate)]
@@ -72,6 +77,9 @@ pub(crate) struct AdminPetTemplate {
     missing_codes: Vec<u16>,
     has_unknown_files: bool,
     unknown_files: Vec<String>,
+    vote_total: i64,
+    status_label: String,
+    status_class: String,
     has_flash: bool,
     flash_message: String,
     flash_class: String,
@@ -123,6 +131,20 @@ pub(crate) async fn admin_handler(
         .collect();
 
     let mut pets: Vec<AdminPetView> = Vec::new();
+    let total_query = Query::select()
+        .from(votes::Entity)
+        .column(votes::Column::PetId)
+        .expr_as(Expr::col(votes::Column::VoteCount).sum(), Alias::new("total_votes"))
+        .group_by_col(votes::Column::PetId)
+        .to_owned();
+    let total_stmt = StatementBuilder::build(&total_query, &DatabaseBackend::Sqlite);
+    let total_rows = state.db.query_all(total_stmt).await?;
+    let mut vote_totals: HashMap<i32, i64> = HashMap::new();
+    for row in total_rows {
+        let pet_id: i32 = row.try_get("", "pet_id")?;
+        let total_votes: i64 = row.try_get("", "total_votes")?;
+        vote_totals.insert(pet_id, total_votes);
+    }
     let votes = votes::Entity::find()
         .filter(votes::Column::VoteDate.gte(start_date))
         .order_by_asc(votes::Column::VoteDate)
@@ -130,7 +152,7 @@ pub(crate) async fn admin_handler(
         .await?;
 
     for pet in pet_db {
-        let chart_svg = if pet.enabled {
+        let chart_svg = if pet.status == pets::PetStatus::Enabled {
             String::new()
         } else {
             let pet_votes = votes
@@ -143,8 +165,11 @@ pub(crate) async fn admin_handler(
         };
         pets.push(AdminPetView {
             name: pet.name,
-            enabled: pet.enabled,
+            status_label: pet.status.to_string(),
+            status_class: pet.status.to_string(),
+            is_enabled: pet.status == pets::PetStatus::Enabled,
             chart_svg,
+            vote_total: vote_totals.get(&pet.id).copied().unwrap_or(0),
         });
     }
 
@@ -193,12 +218,9 @@ pub(crate) async fn admin_pet_view(
 ) -> Result<AdminPetTemplate, HttpetError> {
     let pet_name = normalize_pet_name_strict(&name)?;
 
-    let pet_exists = pets::Entity::find_by_name(state.db.as_ref(), &pet_name)
-        .await?
-        .is_some();
-    if !pet_exists {
+    let Some(pet) = pets::Entity::find_by_name(state.db.as_ref(), &pet_name).await? else {
         return Err(HttpetError::NotFound(pet_name));
-    }
+    };
 
     let status_map = status_codes::status_codes()
         .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
@@ -236,6 +258,17 @@ pub(crate) async fn admin_pet_view(
         None => (false, String::new(), String::new()),
     };
 
+    let total_query = Query::select()
+        .from(votes::Entity)
+        .expr_as(Expr::col(votes::Column::VoteCount).sum(), Alias::new("total_votes"))
+        .and_where(Expr::col(votes::Column::PetId).eq(pet.id))
+        .to_owned();
+    let total_stmt = StatementBuilder::build(&total_query, &DatabaseBackend::Sqlite);
+    let vote_total = match state.db.query_one(total_stmt).await? {
+        Some(row) => row.try_get("", "total_votes").unwrap_or(0),
+        None => 0,
+    };
+
     Ok(AdminPetTemplate {
         pet_name: pet_name.clone(),
         public_url: state.pet_base_url(&pet_name),
@@ -243,6 +276,9 @@ pub(crate) async fn admin_pet_view(
         missing_codes,
         has_unknown_files: !unknown_files.is_empty(),
         unknown_files,
+        vote_total,
+        status_label: pet.status.to_string(),
+        status_class: pet.status.to_string(),
         has_flash,
         flash_message,
         flash_class,
@@ -387,20 +423,24 @@ pub(crate) async fn update_pet_handler(
 ) -> Result<Redirect, HttpetError> {
     let name = normalize_pet_name_strict(&name)?;
 
-    let enabled = form.enabled.is_some();
-    state.create_or_update_pet(&name, enabled).await?;
+    let status_value = form.status.trim().to_ascii_lowercase();
+    let status =
+        pets::PetStatus::from_str(status_value.as_str()).map_err(|_| HttpetError::BadRequest)?;
+    state.create_or_update_pet(&name, status).await?;
     Ok(Redirect::to("/admin/"))
 }
 
-#[instrument(skip_all, fields(name = %form.name, enabled = ?form.enabled))]
+#[instrument(skip_all, fields(name = %form.name, status = %form.status))]
 pub(crate) async fn create_pet_handler(
     State(state): State<AppState>,
     Form(form): Form<PetCreateForm>,
 ) -> Result<Redirect, HttpetError> {
     let name = normalize_pet_name_strict(&form.name)?;
 
-    let enabled = form.enabled.is_some();
-    state.create_or_update_pet(&name, enabled).await?;
+    let status_value = form.status.trim().to_ascii_lowercase();
+    let status =
+        pets::PetStatus::from_str(status_value.as_str()).map_err(|_| HttpetError::BadRequest)?;
+    state.create_or_update_pet(&name, status).await?;
 
     Ok(Redirect::to("/admin/"))
 }

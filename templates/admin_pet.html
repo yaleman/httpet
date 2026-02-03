@@ -16,6 +16,14 @@
       <a class="button-link" href="{{ public_url }}">Public page</a>
     </div>
   </div>
+  <div class="info-row">
+    <div class="info-box status-info {{ status_class }}">
+      <strong>Status:</strong> {{ status_label }}
+    </div>
+    <div class="info-box">
+      <strong>Total votes:</strong> {{ vote_total }}
+    </div>
+  </div>
   <p>Click a missing code to upload an image for that status.</p>
   <div class="status-lists">
     <div class="status-panel">

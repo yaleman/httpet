@@ -112,19 +112,22 @@ impl AppState {
     pub(crate) async fn create_or_update_pet(
         &self,
         pet_name: &str,
-        enabled: bool,
+        status: pets::PetStatus,
     ) -> Result<(), HttpetError> {
         let db_txn: DatabaseTransaction = self.db.as_ref().begin().await?;
+        let enabled = matches!(status, pets::PetStatus::Enabled);
         match pets::Entity::find_by_name(&db_txn, pet_name).await? {
             Some(model) => {
                 let mut am = model.into_active_model();
                 am.enabled = Set(enabled);
+                am.status = Set(status);
                 am.update(&db_txn).await?
             }
             None => {
                 pets::ActiveModel {
                     name: Set(pet_name.to_string()),
                     enabled: Set(enabled),
+                    status: Set(status),
                     ..Default::default()
                 }
                 .insert(&db_txn)
@@ -417,6 +420,14 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
             "/info/{pet}/{status_code}",
             axum::routing::get(views::status_info_view),
         )
+        .route(
+            "/info/{status_code}",
+            axum::routing::get(views::status_info_view_subdomain),
+        )
+        .route(
+            "/{status_code}/info",
+            axum::routing::get(views::info_shortcut_handler),
+        )
         .route("/vote", axum::routing::post(vote_form_handler))
         .route(
             "/vote/{name}",
@@ -531,7 +542,10 @@ mod tests {
     use axum::body::Body;
     use axum::http::{
         Request,
-        header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LAST_MODIFIED, SET_COOKIE},
+        header::{
+            CACHE_CONTROL, CONTENT_TYPE, ETAG, EXPIRES, IF_NONE_MATCH, LAST_MODIFIED, PRAGMA,
+            SET_COOKIE,
+        },
     };
     use html_escape::decode_html_entities;
     use http_body_util::BodyExt;
@@ -694,7 +708,7 @@ mod tests {
     async fn enabled_pet_sets_header_and_status() {
         let (state, app) = get_test_app().await;
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
 
@@ -734,7 +748,7 @@ mod tests {
     async fn root_status_returns_enabled_pet_image() {
         let (state, app) = get_test_app().await;
         state
-            .create_or_update_pet("capybara", true)
+            .create_or_update_pet("capybara", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
 
@@ -890,7 +904,7 @@ mod tests {
         let (state, app) = get_test_app().await;
 
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
         state.write_test_image("dog", 404);
@@ -935,6 +949,7 @@ mod tests {
         let pet = pets::ActiveModel {
             name: Set("fox".to_string()),
             enabled: Set(true),
+            status: Set(pets::PetStatus::Enabled),
             ..Default::default()
         }
         .insert(state.db.as_ref())
@@ -987,7 +1002,7 @@ mod tests {
         let (state, app) = get_test_app().await;
 
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
 
@@ -1020,7 +1035,7 @@ mod tests {
         let (state, app) = get_test_app().await;
 
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
 
@@ -1070,6 +1085,7 @@ mod tests {
         let dog = pets::ActiveModel {
             name: Set("dog".to_string()),
             enabled: Set(true),
+            status: Set(pets::PetStatus::Enabled),
             ..Default::default()
         }
         .insert(state.db.as_ref())
@@ -1078,11 +1094,21 @@ mod tests {
         let cat = pets::ActiveModel {
             name: Set("cat".to_string()),
             enabled: Set(false),
+            status: Set(pets::PetStatus::Voting),
             ..Default::default()
         }
         .insert(state.db.as_ref())
         .await
         .expect("insert cat");
+        let owl = pets::ActiveModel {
+            name: Set("owl".to_string()),
+            enabled: Set(false),
+            status: Set(pets::PetStatus::Submitted),
+            ..Default::default()
+        }
+        .insert(state.db.as_ref())
+        .await
+        .expect("insert owl");
         let today = Utc::now().date_naive();
         votes::ActiveModel {
             pet_id: Set(cat.id),
@@ -1102,6 +1128,15 @@ mod tests {
         .insert(state.db.as_ref())
         .await
         .expect("insert dog votes");
+        votes::ActiveModel {
+            pet_id: Set(owl.id),
+            vote_date: Set(today),
+            vote_count: Set(9),
+            ..Default::default()
+        }
+        .insert(state.db.as_ref())
+        .await
+        .expect("insert owl votes");
 
         let request = Request::builder()
             .method("GET")
@@ -1127,6 +1162,7 @@ mod tests {
             .expect("missing top votes section body");
         assert!(top_votes_section.contains("cat"));
         assert!(!top_votes_section.contains("dog"));
+        assert!(!top_votes_section.contains("owl"));
     }
 
     #[tokio::test]
@@ -1134,7 +1170,7 @@ mod tests {
         let (state, app) = get_test_app().await;
 
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
         state.write_test_image("dog", 404);
@@ -1152,7 +1188,7 @@ mod tests {
         assert!(body.contains("httpet"));
         assert!(body.contains("404"));
         assert!(body.contains(&info.name));
-        assert!(body.contains("href=\"/info/dog/404\""));
+        assert!(body.contains("href=\"/info/404\""));
         assert!(!body.contains("href=\"/404\""));
     }
 
@@ -1161,7 +1197,7 @@ mod tests {
         let (state, app) = get_test_app().await;
 
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
         state.write_test_image("dog", 404);
@@ -1188,7 +1224,7 @@ mod tests {
     async fn path_status_returns_image() {
         let (state, app) = get_test_app().await;
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
         state.write_test_image("dog", 200);
@@ -1242,7 +1278,7 @@ mod tests {
     async fn path_status_returns_not_modified_with_etag() {
         let (state, app) = get_test_app().await;
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
         state.write_test_image("dog", 200);
@@ -1317,7 +1353,7 @@ mod tests {
     async fn info_page_shows_status_details() {
         let (state, app) = get_test_app().await;
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
         state.write_test_image("dog", 200);
@@ -1340,6 +1376,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn status_info_shortcut_redirects_home() {
+        let (_state, app) = get_test_app().await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/100/info")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .expect("missing redirect")
+            .to_str()
+            .expect("invalid location header");
+        assert!(location.contains(TEST_BASE_DOMAIN));
+    }
+
+    #[tokio::test]
+    async fn subdomain_info_page_shows_status_details() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
+            .await
+            .expect("create pet");
+        state.write_test_image("dog", 200);
+        let info = crate::status_codes::status_info(200).expect("status info");
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/info/200")
+            .header("host", &format!("dog.{}", TEST_BASE_DOMAIN))
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response).await;
+        assert!(body.contains(&info.name));
+        let decoded_body = decode_html_entities(&body);
+        assert!(decoded_body.contains(&info.summary));
+        assert!(body.contains("/dog/200"));
+    }
+
+    #[tokio::test]
+    async fn base_domain_info_redirects_to_random_pet() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
+            .await
+            .expect("create pet");
+        state.write_test_image("dog", 200);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/info/200")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .expect("missing redirect")
+            .to_str()
+            .expect("invalid location header");
+        assert!(location.ends_with("/info/dog/200"));
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .expect("missing cache-control"),
+            "no-store"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(PRAGMA)
+                .expect("missing pragma"),
+            "no-cache"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(EXPIRES)
+                .expect("missing expires"),
+            "0"
+        );
+    }
+
+    #[tokio::test]
     async fn admin_update_toggles_enabled() {
         let (state, app) = get_test_app().await;
 
@@ -1348,7 +1478,7 @@ mod tests {
             .uri("/admin/pets/otter")
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .header("host", TEST_BASE_DOMAIN)
-            .body(Body::from("enabled=on"))
+            .body(Body::from("status=enabled"))
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
@@ -1359,7 +1489,7 @@ mod tests {
             .await
             .expect("fetch pet")
             .expect("pet exists");
-        assert!(pet.enabled);
+        assert_eq!(pet.status, pets::PetStatus::Enabled);
 
         let enabled = state.enabled_pets.read().await;
         assert!(enabled.contains(&"otter".to_string()));
@@ -1374,7 +1504,7 @@ mod tests {
             .uri("/admin/pets")
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .header("host", TEST_BASE_DOMAIN)
-            .body(Body::from("name=dog&enabled=on"))
+            .body(Body::from("name=dog&status=enabled"))
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
@@ -1385,14 +1515,14 @@ mod tests {
             .await
             .expect("fetch pet")
             .expect("pet exists");
-        assert!(pet.enabled);
+        assert_eq!(pet.status, pets::PetStatus::Enabled);
     }
 
     #[tokio::test]
     async fn admin_upload_saves_jpeg() {
         let (state, app) = get_test_app().await;
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
 
@@ -1470,7 +1600,7 @@ mod tests {
     async fn admin_upload_converts_png_to_jpeg() {
         let (state, app) = get_test_app().await;
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
 
@@ -1534,7 +1664,7 @@ mod tests {
     async fn admin_upload_requires_overwrite_confirmation() {
         let (state, app) = get_test_app().await;
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
         state.write_test_image("dog", 201);
@@ -1625,7 +1755,7 @@ mod tests {
     async fn admin_delete_requires_image_confirmation() {
         let (state, app) = get_test_app().await;
         state
-            .create_or_update_pet("dog", true)
+            .create_or_update_pet("dog", pets::PetStatus::Enabled)
             .await
             .expect("create pet");
         state.write_test_image("dog", 404);
@@ -1715,6 +1845,7 @@ mod tests {
         pets::ActiveModel {
             name: Set("pangolin".to_string()),
             enabled: Set(false),
+            status: Set(pets::PetStatus::Submitted),
             ..Default::default()
         }
         .insert(db.as_ref())

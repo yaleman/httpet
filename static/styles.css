@@ -253,6 +253,16 @@ a.pill {
 	color: #166534;
 }
 
+.pill.voting {
+	background: #e0e7ff;
+	color: #3730a3;
+}
+
+.pill.submitted {
+	background: #f1f5f9;
+	color: #475569;
+}
+
 form {
 	display: flex;
 	gap: 1rem;
@@ -264,6 +274,50 @@ form {
 	gap: 1rem;
 	flex-wrap: wrap;
 	align-items: center;
+}
+
+.info-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.75rem;
+	align-items: center;
+}
+
+.info-box {
+	margin: 0.75rem 0;
+	padding: 0.5rem 0.75rem;
+	border: 1px solid #e2e8f0;
+	border-radius: 12px;
+	background: #f8fafc;
+	color: #334155;
+	display: inline-flex;
+	gap: 0.35rem;
+	align-items: baseline;
+}
+
+.pill.status-pill {
+	min-width: 0;
+	padding: 0.35rem 0.75rem;
+	font-size: 1rem;
+	border-radius: 999px;
+}
+
+.status-info.enabled {
+	border-color: #86efac;
+	background: #dcfce7;
+	color: #166534;
+}
+
+.status-info.voting {
+	border-color: #c7d2fe;
+	background: #e0e7ff;
+	color: #3730a3;
+}
+
+.status-info.submitted {
+	border-color: #cbd5f5;
+	background: #f1f5f9;
+	color: #475569;
 }
 
 .status-lists {

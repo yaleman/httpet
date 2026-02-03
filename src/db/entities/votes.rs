@@ -56,6 +56,7 @@ pub(crate) async fn record_vote(
             let active = super::pets::ActiveModel {
                 name: Set(name.clone()),
                 enabled: Set(false),
+                status: Set(super::pets::PetStatus::Submitted),
                 ..Default::default()
             };
             active.insert(&db_txn).await?.id

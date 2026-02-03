@@ -5,7 +5,7 @@ use crate::{
     status_codes,
     web::{middleware::AnimalDomain, status_codes_for},
 };
-use axum::response::Response;
+use axum::response::{Redirect, Response};
 use rand::prelude::IndexedRandom;
 use serde_json::json;
 use tokio::fs;
@@ -93,6 +93,21 @@ pub(crate) struct InfoPath {
 }
 
 pub(crate) async fn pet_status_list(state: AppState, pet: &str) -> Result<Response, HttpetError> {
+    pet_status_list_with_prefix(state, pet, format!("/info/{}", pet)).await
+}
+
+pub(crate) async fn pet_status_list_subdomain(
+    state: AppState,
+    pet: &str,
+) -> Result<Response, HttpetError> {
+    pet_status_list_with_prefix(state, pet, "/info".to_string()).await
+}
+
+async fn pet_status_list_with_prefix(
+    state: AppState,
+    pet: &str,
+    info_link_prefix: String,
+) -> Result<Response, HttpetError> {
     let enabled = state.enabled_pets.read().await.contains(&pet.to_string());
     if !enabled {
         return Err(HttpetError::NeedsVote(state.base_url(), pet.to_string()));
@@ -120,7 +135,7 @@ pub(crate) async fn pet_status_list(state: AppState, pet: &str) -> Result<Respon
         name: pet.to_string(),
         status_codes: status_entries,
         base_domain: state.base_domain.clone(),
-        info_link_prefix: format!("/info/{}", pet),
+        info_link_prefix,
         frontend_url: frontend_url_for_state(&state),
     }
     .into_response())
@@ -131,22 +146,66 @@ pub(crate) async fn status_info_view(
     Path(path): Path<InfoPath>,
 ) -> Result<Response, HttpetError> {
     let pet = normalize_pet_name_strict(&path.pet)?;
-    if !(100..=599).contains(&path.status_code) {
+    status_info_response(state, pet, path.status_code).await
+}
+
+pub(crate) async fn status_info_view_subdomain(
+    domain: AnimalDomain,
+    State(state): State<AppState>,
+    Path(status_code): Path<u16>,
+) -> Result<Response, HttpetError> {
+    if !(100..=599).contains(&status_code) {
         return Err(HttpetError::BadRequest);
     }
+    if let Some(pet) = domain.animal {
+        let pet = normalize_pet_name_strict(&pet)?;
+        return status_info_response(state, pet, status_code).await;
+    }
 
+    let Some(pet) = random_pet_with_status(&state, status_code).await? else {
+        return Err(HttpetError::NotFound(format!(
+            "{}",
+            json!({"status_code": status_code})
+        )));
+    };
+    let mut response = Redirect::to(&format!("/info/{pet}/{status_code}")).into_response();
+    response
+        .headers_mut()
+        .insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(axum::http::header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response.headers_mut().insert(
+        axum::http::header::EXPIRES,
+        HeaderValue::from_static("0"),
+    );
+    Ok(response)
+}
+
+pub(crate) async fn info_shortcut_handler(
+    State(state): State<AppState>,
+    Path(_status_code): Path<u16>,
+) -> Result<Response, HttpetError> {
+    Ok(Redirect::to(&frontend_url_for_state(&state)).into_response())
+}
+
+async fn status_info_response(
+    state: AppState,
+    pet: String,
+    status_code: u16,
+) -> Result<Response, HttpetError> {
     let enabled = state.enabled_pets.read().await.contains(&pet);
     if !enabled {
         return Err(HttpetError::NeedsVote(state.base_url(), pet));
     }
 
-    let image_path = state.image_path(&pet, path.status_code);
+    let image_path = state.image_path(&pet, status_code);
     match tokio::fs::metadata(&image_path).await {
         Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Err(HttpetError::NotFound(format!(
                 "{}",
-                json!({"animal": pet, "status_code": path.status_code})
+                json!({"animal": pet, "status_code": status_code})
             )));
         }
         Err(err) => {
@@ -154,20 +213,43 @@ pub(crate) async fn status_info_view(
         }
     }
 
-    let status_info = status_codes::status_info(path.status_code).ok_or_else(|| {
-        HttpetError::NotFound(format!("{}", json!({"status_code": path.status_code})))
+    let status_info = status_codes::status_info(status_code).ok_or_else(|| {
+        HttpetError::NotFound(format!("{}", json!({"status_code": status_code})))
     })?;
 
     Ok(StatusInfoTemplate {
         pet_name: pet.clone(),
-        status_code: path.status_code,
+        status_code,
         status_name: status_info.name.clone(),
         status_summary: status_info.summary.clone(),
         mdn_url: status_info.mdn_url.clone(),
-        image_url: format!("/{}/{}", pet, path.status_code),
+        image_url: format!("/{}/{}", pet, status_code),
         frontend_url: frontend_url_for_state(&state),
     }
     .into_response())
+}
+
+async fn random_pet_with_status(
+    state: &AppState,
+    status_code: u16,
+) -> Result<Option<String>, HttpetError> {
+    let enabled = state.enabled_pets.read().await.clone();
+    if enabled.is_empty() {
+        return Ok(None);
+    }
+
+    let mut candidates = Vec::new();
+    for pet in enabled {
+        let image_path = state.image_path(&pet, status_code);
+        match fs::metadata(&image_path).await {
+            Ok(_) => candidates.push(pet),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(HttpetError::InternalServerError(err.to_string())),
+        }
+    }
+
+    let mut rng = rand::rng();
+    Ok(candidates.choose(&mut rng).cloned())
 }
 
 pub(crate) async fn not_found_response(state: &AppState) -> Response {
@@ -200,7 +282,7 @@ pub(crate) async fn root_handler(
     // if it's a subdomain then handle that.
     if let Some(animal) = domain.animal.as_deref() {
         let animal = normalize_pet_name_strict(animal)?;
-        return pet_status_list(state, &animal).await;
+        return pet_status_list_subdomain(state, &animal).await;
     }
 
     let db = &state.db;
@@ -221,7 +303,7 @@ pub(crate) async fn root_handler(
             Expr::col((pets::Entity, pets::Column::Id))
                 .equals((votes::Entity, votes::Column::PetId)),
         )
-        .and_where(Expr::col((pets::Entity, pets::Column::Enabled)).eq(false))
+        .and_where(Expr::col((pets::Entity, pets::Column::Status)).eq(pets::PetStatus::Voting))
         .and_where(Expr::col((votes::Entity, votes::Column::VoteDate)).gte(start_date))
         .and_where(Expr::col((votes::Entity, votes::Column::VoteDate)).lte(today))
         .group_by_col((pets::Entity, pets::Column::Id))

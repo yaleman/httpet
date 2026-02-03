@@ -14,7 +14,14 @@
     {% for pet_name in orphan_pets %}
     <form method="post" action="/admin/pets">
       <input type="hidden" name="name" value="{{ pet_name }}">
-      <label><input type="checkbox" name="enabled" checked> Enabled</label>
+      <label>
+        Status
+        <select name="status">
+          <option value="enabled" selected>Enabled</option>
+          <option value="voting">Voting</option>
+          <option value="submitted">Submitted</option>
+        </select>
+      </label>
       <button type="submit">Create {{ pet_name }}</button>
     </form>
     {% endfor %}
@@ -28,7 +35,14 @@
       Name
       <input type="text" name="name" placeholder="dog">
     </label>
-    <label><input type="checkbox" name="enabled" checked> Enabled</label>
+    <label>
+      Status
+      <select name="status">
+        <option value="enabled" selected>Enabled</option>
+        <option value="voting">Voting</option>
+        <option value="submitted">Submitted</option>
+      </select>
+    </label>
     <button type="submit">Add pet</button>
   </form>
 </section>
@@ -71,9 +85,12 @@
       <div>
         <h2><a href="/admin/pets/{{ pet.name }}">{{ pet.name }}</a></h2>
       </div>
-      <span class="pill{% if pet.enabled %} enabled{% endif %}">{% if pet.enabled %}enabled{% else %}disabled{% endif %}</span>
+      <span class="pill {{ pet.status_class }}">{{ pet.status_label }}</span>
     </div>
-    {% if !pet.enabled %}
+    <div class="info-box">
+      <strong>Total votes:</strong> {{ pet.vote_total }}
+    </div>
+    {% if !pet.is_enabled %}
     {{ pet.chart_svg|safe }}
     <div class="axis-labels">
       <span>{{ start_label }}</span>
@@ -82,7 +99,14 @@
     {% endif %}
     <div class="pet-actions">
       <form method="post" action="/admin/pets/{{ pet.name }}">
-        <label><input type="checkbox" name="enabled" {% if pet.enabled %}checked{% endif %}> Enabled</label>
+        <label>
+          Status
+          <select name="status">
+            <option value="enabled" {% if pet.status_label == "enabled" %}selected{% endif %}>Enabled</option>
+            <option value="voting" {% if pet.status_label == "voting" %}selected{% endif %}>Voting</option>
+            <option value="submitted" {% if pet.status_label == "submitted" %}selected{% endif %}>Submitted</option>
+          </select>
+        </label>
         <button type="submit">Save</button>
       </form>
       <a class="button-link" href="{{ state.pet_base_url(pet.name) }}">Public page</a>
