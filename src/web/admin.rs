@@ -1,6 +1,8 @@
 use super::csrf::{csrf_token, validate_csrf};
 use super::flash;
-use super::images::{ImageCacheHeaders, apply_cache_headers, is_not_modified, not_modified_response};
+use super::images::{
+    ImageCacheHeaders, apply_cache_headers, is_not_modified, not_modified_response,
+};
 use super::prelude::*;
 use crate::constants::X_HTTPET_ANIMAL;
 use crate::db::entities::{pets, votes};
