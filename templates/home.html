@@ -22,6 +22,19 @@
 </section>
 
 <section class="card">
+  <h2>Vote for a pet</h2>
+  <p>Vote for an existing pet or add a new one to the list.</p>
+  <form method="post" action="/vote">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      Name
+      <input type="text" name="name" placeholder="dog">
+    </label>
+    <button type="submit">Vote</button>
+  </form>
+</section>
+
+<section class="card">
   <h2>Top votes (last 7 days)</h2>
   {% if top_pets.len() == 0 %}
   <p>No votes yet. Be the first to vote for a pet.</p>
@@ -43,18 +56,5 @@
     {% endfor %}
   </div>
   {% endif %}
-</section>
-
-<section class="card">
-  <h2>Vote for a pet</h2>
-  <p>Vote for an existing pet or add a new one to the list.</p>
-  <form method="post" action="/vote">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>
-      Name
-      <input type="text" name="name" placeholder="dog">
-    </label>
-    <button type="submit">Vote</button>
-  </form>
 </section>
 {% endblock content %}

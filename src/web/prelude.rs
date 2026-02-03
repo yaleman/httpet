@@ -1,4 +1,4 @@
-pub(crate) use super::normalize_pet_name;
+pub(crate) use super::{normalize_pet_name, normalize_pet_name_strict};
 pub(crate) use crate::error::HttpetError;
 pub(crate) use crate::{db, db::entities::votes::record_vote, web::AppState};
 pub(crate) use askama::Template;

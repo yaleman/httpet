@@ -191,10 +191,7 @@ pub(crate) async fn admin_pet_view(
     session: Session,
     Path(name): Path<String>,
 ) -> Result<AdminPetTemplate, HttpetError> {
-    let pet_name = normalize_pet_name(&name);
-    if pet_name.is_empty() {
-        return Err(HttpetError::BadRequest);
-    }
+    let pet_name = normalize_pet_name_strict(&name)?;
 
     let pet_exists = pets::Entity::find_by_name(state.db.as_ref(), &pet_name)
         .await?
@@ -257,10 +254,7 @@ pub(crate) async fn admin_pet_upload_view(
     session: Session,
     Path(path): Path<PetStatusPath>,
 ) -> Result<AdminUploadTemplate, HttpetError> {
-    let pet_name = normalize_pet_name(&path.name);
-    if pet_name.is_empty() {
-        return Err(HttpetError::BadRequest);
-    }
+    let pet_name = normalize_pet_name_strict(&path.name)?;
     if !(100..=599).contains(&path.status_code) {
         return Err(HttpetError::BadRequest);
     }
@@ -312,10 +306,7 @@ pub(crate) async fn admin_pet_image_handler(
     headers: HeaderMap,
     Path(path): Path<PetStatusPath>,
 ) -> Result<Response, HttpetError> {
-    let pet_name = normalize_pet_name(&path.name);
-    if pet_name.is_empty() {
-        return Err(HttpetError::BadRequest);
-    }
+    let pet_name = normalize_pet_name_strict(&path.name)?;
     if !(100..=599).contains(&path.status_code) {
         return Err(HttpetError::BadRequest);
     }
@@ -360,10 +351,7 @@ pub(crate) async fn delete_pet_view(
     session: Session,
     Path(name): Path<String>,
 ) -> Result<DeletePetTemplate, HttpetError> {
-    let pet_name = normalize_pet_name(&name);
-    if pet_name.is_empty() {
-        return Err(HttpetError::BadRequest);
-    }
+    let pet_name = normalize_pet_name_strict(&name)?;
 
     let pet_exists = pets::Entity::find_by_name(state.db.as_ref(), &pet_name)
         .await?
@@ -397,7 +385,7 @@ pub(crate) async fn update_pet_handler(
     Path(name): Path<String>,
     Form(form): Form<PetUpdateForm>,
 ) -> Result<Redirect, HttpetError> {
-    let name = normalize_pet_name(&name);
+    let name = normalize_pet_name_strict(&name)?;
 
     let enabled = form.enabled.is_some();
     state.create_or_update_pet(&name, enabled).await?;
@@ -409,10 +397,7 @@ pub(crate) async fn create_pet_handler(
     State(state): State<AppState>,
     Form(form): Form<PetCreateForm>,
 ) -> Result<Redirect, HttpetError> {
-    let name = normalize_pet_name(&form.name);
-    if name.is_empty() {
-        return Err(HttpetError::BadRequest);
-    }
+    let name = normalize_pet_name_strict(&form.name)?;
 
     let enabled = form.enabled.is_some();
     state.create_or_update_pet(&name, enabled).await?;
@@ -444,7 +429,7 @@ pub(crate) async fn upload_image_handler(
                     .text()
                     .await
                     .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
-                pet_name = Some(normalize_pet_name(&name));
+                pet_name = Some(normalize_pet_name_strict(&name)?);
             }
             "csrf_token" => {
                 let value = field
@@ -540,10 +525,7 @@ pub(crate) async fn delete_pet_post(
 ) -> Result<Redirect, HttpetError> {
     validate_csrf(&session, &form.csrf_token).await?;
 
-    let pet_name = normalize_pet_name(&name);
-    if pet_name.is_empty() {
-        return Err(HttpetError::BadRequest);
-    }
+    let pet_name = normalize_pet_name_strict(&name)?;
 
     let image_files = list_pet_images(&state.image_dir, &pet_name).await?;
     if !image_files.is_empty() {

@@ -6,7 +6,9 @@ use crate::{
     web::{middleware::AnimalDomain, status_codes_for},
 };
 use axum::response::Response;
+use rand::prelude::IndexedRandom;
 use serde_json::json;
+use tokio::fs;
 
 #[derive(Template, WebTemplate)]
 #[template(path = "vote_page.html")]
@@ -42,6 +44,13 @@ pub(crate) struct HomeTemplate {
     pub(crate) top_pets: Vec<TopPet>,
     pub(crate) state: AppState,
     pub(crate) csrf_token: String,
+}
+
+#[derive(Template, WebTemplate)]
+#[template(path = "not_found.html")]
+pub(crate) struct NotFoundTemplate {
+    pub(crate) has_image: bool,
+    pub(crate) image_url: String,
 }
 
 #[derive(Template, WebTemplate)]
@@ -107,10 +116,7 @@ pub(crate) async fn status_info_view(
     State(state): State<AppState>,
     Path(path): Path<InfoPath>,
 ) -> Result<Response, HttpetError> {
-    let pet = normalize_pet_name(&path.pet);
-    if pet.is_empty() {
-        return Err(HttpetError::BadRequest);
-    }
+    let pet = normalize_pet_name_strict(&path.pet)?;
     if !(100..=599).contains(&path.status_code) {
         return Err(HttpetError::BadRequest);
     }
@@ -149,6 +155,18 @@ pub(crate) async fn status_info_view(
     .into_response())
 }
 
+pub(crate) async fn not_found_response(state: &AppState) -> Response {
+    let image_url = random_404_image_url(state).await;
+    let has_image = image_url.is_some();
+    let mut response = NotFoundTemplate {
+        has_image,
+        image_url: image_url.unwrap_or_default(),
+    }
+    .into_response();
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response
+}
+
 /// handles the / GET
 pub(crate) async fn root_handler(
     domain: AnimalDomain,
@@ -157,7 +175,8 @@ pub(crate) async fn root_handler(
 ) -> Result<Response, HttpetError> {
     // if it's a subdomain then handle that.
     if let Some(animal) = domain.animal.as_deref() {
-        return pet_status_list(state, animal).await;
+        let animal = normalize_pet_name_strict(animal)?;
+        return pet_status_list(state, &animal).await;
     }
 
     let db = &state.db;
@@ -203,4 +222,35 @@ pub(crate) async fn root_handler(
         csrf_token,
     }
     .into_response())
+}
+
+async fn random_404_image_url(state: &AppState) -> Option<String> {
+    let mut entries = fs::read_dir(&state.image_dir).await.ok()?;
+    let mut candidates = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let file_type = match entry.file_type().await {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let dir_name = entry.file_name().to_string_lossy().to_string();
+        if normalize_pet_name(&dir_name) != dir_name {
+            continue;
+        }
+        if normalize_pet_name_strict(&dir_name).is_err() {
+            continue;
+        }
+        let image_path = entry.path().join("404.jpg");
+        if fs::metadata(&image_path).await.is_ok() {
+            candidates.push(dir_name);
+        }
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut rng = rand::rng();
+    let pet = candidates.choose(&mut rng)?;
+    Some(format!("/{pet}/404"))
 }

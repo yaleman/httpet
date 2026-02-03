@@ -9,10 +9,7 @@ pub(crate) async fn vote_form_handler(
     State(state): State<AppState>,
     Form(form): Form<VoteForm>,
 ) -> Result<VoteThanksTemplate, HttpetError> {
-    let name = normalize_pet_name(&form.name);
-    if name.is_empty() {
-        return Err(HttpetError::BadRequest);
-    }
+    let name = normalize_pet_name_strict(&form.name)?;
     record_vote(&state.db, &name).await?;
     Ok(VoteThanksTemplate { name })
 }

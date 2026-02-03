@@ -1,0 +1,17 @@
+{% extends "base_template.html" %}
+
+{% block title %}Not Found - {{ super() }}{% endblock title %}
+{% block subtitle %}That URL doesn't exist.{% endblock subtitle %}
+
+{% block content %}
+<section class="card">
+  <h2>Page not found</h2>
+  <p>Check the URL or head back to the homepage.</p>
+  {% if has_image %}
+  <div class="status-image-card">
+    <img class="status-image" src="{{ image_url }}" alt="Random httpet 404 image">
+  </div>
+  {% endif %}
+  <p><a class="status-link" href="/">Go back home</a></p>
+</section>
+{% endblock content %}

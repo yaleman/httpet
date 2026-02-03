@@ -1,5 +1,6 @@
 //! Web server/views/everything
 
+use std::net::SocketAddr;
 use std::path::{Path as StdPath, PathBuf};
 use std::str::FromStr;
 
@@ -35,7 +36,7 @@ use admin::{
 };
 use csrf::validate_csrf;
 use images::{ImageCacheHeaders, apply_cache_headers, is_not_modified, not_modified_response};
-use middleware::{AnimalDomain, admin_base_domain_only};
+use middleware::{AnimalDomain, admin_base_domain_only, not_found_template, request_logger};
 use url::Url;
 use views::{VotePageTemplate, VoteThanksTemplate};
 
@@ -296,7 +297,7 @@ async fn vote_pet_handler(
     Form(form): Form<VotePetForm>,
 ) -> Result<VoteThanksTemplate, HttpetError> {
     validate_csrf(&session, &form.csrf_token).await?;
-    let name = normalize_pet_name(&name);
+    let name = normalize_pet_name_strict(&name)?;
     record_vote(&state.db, &name).await?;
     Ok(VoteThanksTemplate { name: name.clone() })
 }
@@ -308,10 +309,8 @@ async fn vote_pet_view(
     Path(name): Path<String>,
 ) -> Result<VotePageTemplate, HttpetError> {
     let csrf_token = csrf::csrf_token(&session).await?;
-    Ok(VotePageTemplate {
-        name: normalize_pet_name(&name),
-        csrf_token,
-    })
+    let name = normalize_pet_name_strict(&name)?;
+    Ok(VotePageTemplate { name, csrf_token })
 }
 
 #[derive(Deserialize)]
@@ -331,10 +330,7 @@ async fn vote_form_handler(
     Form(form): Form<VoteForm>,
 ) -> Result<VoteThanksTemplate, HttpetError> {
     validate_csrf(&session, &form.csrf_token).await?;
-    let name = normalize_pet_name(&form.name);
-    if name.is_empty() {
-        return Err(HttpetError::BadRequest);
-    }
+    let name = normalize_pet_name_strict(&form.name)?;
     record_vote(&state.db, &name).await?;
     Ok(VoteThanksTemplate { name })
 }
@@ -350,7 +346,7 @@ async fn pet_or_status_handler(
         return get_status_handler(domain, State(state), headers, Path(status_code)).await;
     }
 
-    let pet = normalize_pet_name(&segment);
+    let pet = normalize_pet_name_strict(&segment)?;
     views::pet_status_list(state, &pet).await
 }
 
@@ -365,7 +361,7 @@ async fn pet_status_handler(
     headers: HeaderMap,
     Path(path): Path<PetStatusPath>,
 ) -> Result<axum::response::Response, HttpetError> {
-    let pet = normalize_pet_name(&path.pet);
+    let pet = normalize_pet_name_strict(&path.pet)?;
     pet_status_response(&state, &pet, path.status_code, &headers).await
 }
 
@@ -423,7 +419,12 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
         .route("/{segment}", axum::routing::get(pet_or_status_handler))
         .nest_service("/static", axum::routing::get_service(static_service))
         .layer(session_layer)
-        .layer(DefaultBodyLimit::max(4096 * 1024 * 1024)))
+        .layer(DefaultBodyLimit::max(4096 * 1024 * 1024))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            not_found_template,
+        ))
+        .layer(axum::middleware::from_fn(request_logger)))
 }
 
 pub(crate) fn normalize_pet_name(name: &str) -> String {
@@ -433,6 +434,17 @@ pub(crate) fn normalize_pet_name(name: &str) -> String {
     } else {
         trimmed
     }
+}
+
+pub(crate) fn normalize_pet_name_strict(name: &str) -> Result<String, HttpetError> {
+    let normalized = normalize_pet_name(name);
+    if normalized.is_empty() {
+        return Err(HttpetError::BadRequest);
+    }
+    if !normalized.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return Err(HttpetError::BadRequest);
+    }
+    Ok(normalized)
 }
 
 async fn status_codes_for(image_dir: &StdPath, animal: &str) -> Result<Vec<u16>, HttpetError> {
@@ -486,7 +498,12 @@ pub async fn setup_server(
     info!("Starting server on http://{}", addr);
     // run our app with hyper, listening globally on port 3000
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    if let Err(err) = axum::serve(listener, app).await {
+    if let Err(err) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    {
         error!("Server error: {}", err);
     }
     Ok(())
@@ -825,6 +842,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn vote_form_rejects_non_letters() {
+        let (state, app) = get_test_app().await;
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let (body, cookie) = read_body_and_cookie(response).await;
+        let csrf_token = extract_csrf_token(&body);
+        let cookie = cookie.expect("missing session cookie");
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/vote")
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header("cookie", &cookie)
+            .body(Body::from(format!("name=cat123&csrf_token={csrf_token}")))
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let pet = pets::Entity::find()
+            .filter(pets::Column::Name.eq("cat123"))
+            .one(state.db.as_ref())
+            .await
+            .expect("fetch pet");
+        assert!(pet.is_none());
+    }
+
+    #[tokio::test]
+    async fn not_found_renders_template_with_image() {
+        let (state, app) = get_test_app().await;
+
+        state
+            .create_or_update_pet("dog", true)
+            .await
+            .expect("create pet");
+        state.write_test_image("dog", 404);
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/static/missing.css")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = read_body(response).await;
+
+        assert!(body.contains("Not Found - httpet"));
+        assert!(body.contains("/dog/404"));
+    }
+
+    #[tokio::test]
     async fn admin_page_renders_pet_stats() {
         let (state, app) = get_test_app().await;
 
@@ -1010,14 +1084,17 @@ mod tests {
 
         assert!(body.contains("Available pets"));
         assert!(body.contains(&format!("dog.{}", TEST_BASE_DOMAIN)));
-        assert!(body.contains("Top votes"));
+        let vote_index = body.find("Vote for a pet").expect("missing vote section");
+        let top_votes_index = body
+            .find("Top votes (last 7 days)")
+            .expect("missing top votes section");
+        assert!(vote_index < top_votes_index);
         let top_votes_section = body
-            .split("Top votes (last 7 days)")
-            .nth(1)
-            .expect("missing top votes section")
-            .split("Vote for a pet")
+            .get(top_votes_index..)
+            .expect("top votes slice")
+            .split("</section>")
             .next()
-            .expect("missing vote section");
+            .expect("missing top votes section body");
         assert!(top_votes_section.contains("cat"));
         assert!(!top_votes_section.contains("dog"));
     }

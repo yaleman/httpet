@@ -1,13 +1,22 @@
 //! Error handling
 
 use axum::response::{IntoResponse, Redirect};
-use tracing::info;
+use tracing::{info, warn};
 
 /// definitions for the httpet application.
 #[derive(Debug)]
 pub enum HttpetError {
     /// When you didn't do the right thing
     BadRequest,
+    /// Invalid IP address headers
+    InvalidIpHeader {
+        /// Header name
+        header: String,
+        /// Raw header value
+        value: String,
+        /// Client IP from connect info (if available)
+        client_ip: String,
+    },
     /// Missing or invalid session
     Unauthorized,
     /// When DB operations fail
@@ -52,7 +61,23 @@ impl IntoResponse for HttpetError {
                 Redirect::to(&format!("{}/vote/{}", base_url, animal)).into_response()
             }
             HttpetError::BadRequest => {
-                info!("Bad request received");
+                warn!("Bad request received");
+                let mut response =
+                    axum::response::Response::new(axum::body::Body::from("Bad Request"));
+                *response.status_mut() = axum::http::StatusCode::BAD_REQUEST;
+                response
+            }
+            HttpetError::InvalidIpHeader {
+                header,
+                value,
+                client_ip,
+            } => {
+                warn!(
+                    client_ip = %client_ip,
+                    header = %header,
+                    value = %value,
+                    "Invalid IP header received"
+                );
                 let mut response =
                     axum::response::Response::new(axum::body::Body::from("Bad Request"));
                 *response.status_mut() = axum::http::StatusCode::BAD_REQUEST;

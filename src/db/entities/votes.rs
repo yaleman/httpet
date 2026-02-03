@@ -4,7 +4,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use sea_orm::{ActiveValue::Set, IntoActiveModel, TransactionTrait, entity::prelude::*};
 
-use crate::{error::HttpetError, web::normalize_pet_name};
+use crate::{error::HttpetError, web::normalize_pet_name_strict};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "votes")]
@@ -45,7 +45,7 @@ pub(crate) async fn record_vote(
     db: &Arc<DatabaseConnection>,
     name: &str,
 ) -> Result<(), HttpetError> {
-    let name = normalize_pet_name(name);
+    let name = normalize_pet_name_strict(name)?;
     let db_txn = db.begin().await?;
 
     let pet = super::pets::Entity::find_by_name(&db_txn, &name).await?;

@@ -1,11 +1,11 @@
 {% extends "base_template.html" %}
 
-{% block title %}Vote for {{ name }} - {{ super() }}{% endblock title %}
+{% block title %}Vote for new pet - {{ super() }}{% endblock title %}
 {% block subtitle %}Help bring {{ name }} to httpet.{% endblock subtitle %}
 
 {% block content %}
-<h1>Help bring {{ name }} to httpet</h1>
-<p>This pet is not enabled yet. Vote to prioritize adding it to the lineup.</p>
+<h1>{{ name }} is not on httpet yet!</h1>
+<p>Vote to prioritize adding it to the lineup.</p>
 <form method="post" action="/vote/{{ name }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <button type="submit">Vote for {{ name }}</button>
