@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use tracing::log::info;
 
 #[derive(Parser, Debug)]
 #[command(name = "openai_image_generator")]
@@ -242,7 +243,7 @@ async fn main() -> Result<()> {
         req_body.style = Some(Style::Natural);
     }
 
-    eprintln!(
+    info!(
         "Requesting image: animal={animal}, code={status_code}, model={}, size={}, quality={:?}, output={}",
         args.model,
         req_body.size,

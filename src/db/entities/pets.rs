@@ -4,25 +4,26 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-#[derive(
-    Clone, Copy, Debug, EnumIter, DeriveActiveEnum, PartialEq, Eq, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, EnumIter, DeriveActiveEnum, PartialEq, Eq, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Text")]
 /// Visibility status for a pet.
 pub enum PetStatus {
     /// Newly submitted and hidden from public lists.
-    #[sea_orm(string_value = "submitted")]
+    #[sea_orm(string_value = "s")]
+    #[serde(rename = "s")]
     Submitted,
     /// Eligible for voting and shown on the home page.
-    #[sea_orm(string_value = "voting")]
+    #[sea_orm(string_value = "v")]
+    #[serde(rename = "v")]
     Voting,
     /// Enabled for public access.
-    #[sea_orm(string_value = "enabled")]
+    #[sea_orm(string_value = "e")]
+    #[serde(rename = "e")]
     Enabled,
 }
 
 impl PetStatus {
-    /// Returns the string representation used in storage and templates.
+    /// Returns the human-readable string used in templates.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Submitted => "submitted",
@@ -43,9 +44,9 @@ impl FromStr for PetStatus {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
-            "submitted" => Ok(Self::Submitted),
-            "voting" => Ok(Self::Voting),
-            "enabled" => Ok(Self::Enabled),
+            "submitted" | "s" => Ok(Self::Submitted),
+            "voting" | "v" => Ok(Self::Voting),
+            "enabled" | "e" => Ok(Self::Enabled),
             _ => Err(()),
         }
     }

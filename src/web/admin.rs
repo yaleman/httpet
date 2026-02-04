@@ -12,7 +12,9 @@ use axum::http::HeaderMap;
 use axum::response::{Redirect, Response};
 use chrono::{Duration, NaiveDate, Utc};
 use sea_orm::sea_query::{Alias, Expr, Query};
-use sea_orm::{ColumnTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, StatementBuilder};
+use sea_orm::{
+    ColumnTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, StatementBuilder,
+};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, ErrorKind};
 use std::path::Path as StdPath;
@@ -134,7 +136,10 @@ pub(crate) async fn admin_handler(
     let total_query = Query::select()
         .from(votes::Entity)
         .column(votes::Column::PetId)
-        .expr_as(Expr::col(votes::Column::VoteCount).sum(), Alias::new("total_votes"))
+        .expr_as(
+            Expr::col(votes::Column::VoteCount).sum(),
+            Alias::new("total_votes"),
+        )
         .group_by_col(votes::Column::PetId)
         .to_owned();
     let total_stmt = StatementBuilder::build(&total_query, &DatabaseBackend::Sqlite);
@@ -260,7 +265,10 @@ pub(crate) async fn admin_pet_view(
 
     let total_query = Query::select()
         .from(votes::Entity)
-        .expr_as(Expr::col(votes::Column::VoteCount).sum(), Alias::new("total_votes"))
+        .expr_as(
+            Expr::col(votes::Column::VoteCount).sum(),
+            Alias::new("total_votes"),
+        )
         .and_where(Expr::col(votes::Column::PetId).eq(pet.id))
         .to_owned();
     let total_stmt = StatementBuilder::build(&total_query, &DatabaseBackend::Sqlite);

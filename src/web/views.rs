@@ -178,16 +178,17 @@ pub(crate) async fn status_info_view_subdomain(
         )));
     };
     let mut response = Redirect::to(&format!("/info/{pet}/{status_code}")).into_response();
-    response
-        .headers_mut()
-        .insert(axum::http::header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
-        .headers_mut()
-        .insert(axum::http::header::PRAGMA, HeaderValue::from_static("no-cache"));
     response.headers_mut().insert(
-        axum::http::header::EXPIRES,
-        HeaderValue::from_static("0"),
+        axum::http::header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
     );
+    response.headers_mut().insert(
+        axum::http::header::PRAGMA,
+        HeaderValue::from_static("no-cache"),
+    );
+    response
+        .headers_mut()
+        .insert(axum::http::header::EXPIRES, HeaderValue::from_static("0"));
     Ok(response)
 }
 
@@ -242,9 +243,8 @@ async fn status_info_response(
         }
     }
 
-    let status_info = status_codes::status_info(status_code).ok_or_else(|| {
-        HttpetError::NotFound(format!("{}", json!({"status_code": status_code})))
-    })?;
+    let status_info = status_codes::status_info(status_code)
+        .ok_or_else(|| HttpetError::NotFound(format!("{}", json!({"status_code": status_code}))))?;
 
     let frontend_url = frontend_url_for_state(&state);
 
@@ -287,9 +287,8 @@ async fn preview_image_response(
         Err(err) => return Err(HttpetError::InternalServerError(err.to_string())),
     };
 
-    let status_info = status_codes::status_info(status_code).ok_or_else(|| {
-        HttpetError::NotFound(format!("{}", json!({"status_code": status_code})))
-    })?;
+    let status_info = status_codes::status_info(status_code)
+        .ok_or_else(|| HttpetError::NotFound(format!("{}", json!({"status_code": status_code}))))?;
 
     let image_base64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
     let image_href = format!("data:image/jpeg;base64,{}", image_base64);
@@ -345,10 +344,9 @@ async fn preview_image_response(
     );
 
     let mut response = Response::new(axum::body::Body::from(svg));
-    response.headers_mut().insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("image/svg+xml"),
-    );
+    response
+        .headers_mut()
+        .insert(CONTENT_TYPE, HeaderValue::from_static("image/svg+xml"));
     Ok(response)
 }
 

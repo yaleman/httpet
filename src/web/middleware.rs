@@ -1,8 +1,8 @@
 use axum::body::Body;
 use axum::extract::{ConnectInfo, FromRequestParts};
-use axum::http::{HeaderMap, Request};
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST, TRANSFER_ENCODING};
 use axum::http::request::Parts;
+use axum::http::{HeaderMap, Request};
 use axum::middleware::Next;
 use axum::response::{Redirect, Response};
 use chrono::{SecondsFormat, Utc};
@@ -193,13 +193,13 @@ fn current_timestamp() -> String {
 
 #[derive(Debug, Serialize)]
 struct RequestLog<'a> {
-    timestamp: &'a str,
-    client_ip: &'a str,
-    method: &'a str,
-    uri: &'a str,
-    status: u16,
+    time: &'a str,
+    src: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     forwarded_for: Option<Vec<IpAddr>>,
+    http_method: &'a str,
+    uri: &'a str,
+    status: u16,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     real_ip: Option<IpAddr>,
@@ -207,18 +207,18 @@ struct RequestLog<'a> {
 
 impl<'a> RequestLog<'a> {
     fn new(
-        timestamp: &'a str,
-        client_ip: &'a str,
-        method: &'a str,
+        time: &'a str,
+        src: &'a str,
+        http_method: &'a str,
         uri: &'a str,
         status: u16,
         forwarded_for: Option<Vec<IpAddr>>,
         real_ip: Option<IpAddr>,
     ) -> Self {
         Self {
-            timestamp,
-            client_ip,
-            method,
+            time,
+            src,
+            http_method,
             uri,
             status,
             forwarded_for,
@@ -227,7 +227,7 @@ impl<'a> RequestLog<'a> {
     }
 
     pub(crate) fn print(&self) {
-        println!("{}", serde_json::json!(&self));
+        tracing::log::info!("{}", serde_json::json!(&self));
     }
 }
 
@@ -388,8 +388,7 @@ mod tests {
             .body(Body::empty())
             .expect("request");
 
-        let err =
-            parse_forwarded_for_header(request.headers(), "192.0.2.5").expect_err("invalid");
+        let err = parse_forwarded_for_header(request.headers(), "192.0.2.5").expect_err("invalid");
         let HttpetError::InvalidIpHeader {
             header,
             value,

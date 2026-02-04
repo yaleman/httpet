@@ -23,17 +23,20 @@ use clap::Parser;
 use httpet::config::setup_logging;
 use sea_orm_migration::MigratorTrait;
 use tokio::signal::{unix::SignalKind, unix::signal};
-use tracing::{error, info, warn};
+use tracing::log::{error, info, warn};
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
-async fn main() -> Result<ExitCode, Box<std::io::Error>> {
+async fn main() -> ExitCode {
     let cli = httpet::cli::CliOptions::parse();
 
-    setup_logging(cli.debug)?;
+    if let Err(err) = setup_logging(cli.debug) {
+        eprintln!("Logging setup error: {}", err);
+        return ExitCode::FAILURE;
+    };
 
     if let Err(err) = httpet::status_codes::init() {
         error!("Status code metadata error: {}", err);
-        return Err(Box::new(std::io::Error::other(err)));
+        return ExitCode::FAILURE;
     }
 
     let db = match httpet::db::connect_db(
@@ -45,23 +48,29 @@ async fn main() -> Result<ExitCode, Box<std::io::Error>> {
         Ok(db) => db,
         Err(err) => {
             error!("Database connection error: {}", err);
-            return Err(Box::new(std::io::Error::other(err)));
+            return ExitCode::FAILURE;
         }
     };
 
-    if let Err(err) = httpet::db::migrations::Migrator::up(db.as_ref(), None).await {
-        error!(error=?err, db_path=cli.database_path.as_deref().unwrap_or("./db/httpet.sqlite"), "Database migration error");
-        return Err(Box::new(std::io::Error::other(err)));
+    if let Err(error) = httpet::db::migrations::Migrator::up(db.as_ref(), None).await {
+        tracing::error!(error=?error, db_path=cli.database_path.as_deref().unwrap_or("./db/httpet.sqlite"), "Database migration error");
+        return ExitCode::FAILURE;
     }
 
-    let mut hangup_waiter = signal(SignalKind::hangup())?;
+    let mut hangup_waiter = match signal(SignalKind::hangup()) {
+        Ok(signal) => signal,
+        Err(err) => {
+            error!("Failed to set up SIGHUP handler: {}", err);
+            return ExitCode::FAILURE;
+        }
+    };
 
     loop {
         let enabled_pets = match httpet::db::entities::pets::Entity::enabled(db.as_ref()).await {
             Ok(pets) => pets.into_iter().map(|pet| pet.name).collect(),
             Err(err) => {
                 error!("Failed to load enabled pets: {}", err);
-                return Err(Box::new(std::io::Error::other(err)));
+                return ExitCode::FAILURE;
             }
         };
         tokio::select! {
@@ -70,9 +79,9 @@ async fn main() -> Result<ExitCode, Box<std::io::Error>> {
             enabled_pets,
             db.clone(),
         ) => {
-            if let Err(err) = res {
-                    error!("Server error: {:?}", err);
-                    break;
+            if let Err(error) = res {
+                    error!("Server error: {:?}", error);
+                    return ExitCode::FAILURE
                 } else {
                     info!("Server has shut down gracefully.");
                 };
@@ -91,5 +100,5 @@ async fn main() -> Result<ExitCode, Box<std::io::Error>> {
         }
     }
 
-    Ok(ExitCode::SUCCESS)
+    ExitCode::SUCCESS
 }

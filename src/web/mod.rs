@@ -10,6 +10,7 @@ use crate::db::entities::pets;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::HeaderMap;
+use axum::response::Redirect;
 use rand::prelude::IndexedRandom;
 use sea_orm::{DatabaseTransaction, IntoActiveModel, TransactionTrait};
 use serde::Deserialize;
@@ -400,6 +401,10 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
             axum::routing::get(delete_pet_view).post(delete_pet_post),
         )
         .route("/admin/images", axum::routing::post(upload_image_handler))
+        .route(
+            "/admin/{*wildcard}",
+            axum::routing::get(async move || Redirect::to("/admin/")),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             admin_base_domain_only,
@@ -1517,17 +1522,11 @@ mod tests {
             "no-store"
         );
         assert_eq!(
-            response
-                .headers()
-                .get(PRAGMA)
-                .expect("missing pragma"),
+            response.headers().get(PRAGMA).expect("missing pragma"),
             "no-cache"
         );
         assert_eq!(
-            response
-                .headers()
-                .get(EXPIRES)
-                .expect("missing expires"),
+            response.headers().get(EXPIRES).expect("missing expires"),
             "0"
         );
     }

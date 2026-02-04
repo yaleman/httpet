@@ -1,7 +1,7 @@
 //! Error handling
 
 use axum::response::{IntoResponse, Redirect};
-use tracing::{info, warn};
+use tracing::log::{info, warn};
 
 /// definitions for the httpet application.
 #[derive(Debug)]
@@ -73,10 +73,8 @@ impl IntoResponse for HttpetError {
                 client_ip,
             } => {
                 warn!(
-                    client_ip = %client_ip,
-                    header = %header,
-                    value = %value,
-                    "Invalid IP header received"
+                    "Invalid IP header received client_ip={} header='{}' value='{}'",
+                    client_ip, header, value
                 );
                 let mut response =
                     axum::response::Response::new(axum::body::Body::from("Bad Request"));
