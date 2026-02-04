@@ -6,7 +6,7 @@ use super::images::{
 use super::prelude::*;
 use crate::constants::X_HTTPET_ANIMAL;
 use crate::db::entities::{pets, votes};
-use crate::status_codes;
+use crate::status_codes::{self, STATUS_CODES};
 use axum::extract::{Form, Multipart, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Redirect, Response};
@@ -227,10 +227,7 @@ pub(crate) async fn admin_pet_view(
         return Err(HttpetError::NotFound(pet_name));
     };
 
-    let status_map = status_codes::status_codes()
-        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
-    let known_codes: Vec<u16> = status_map.keys().copied().collect();
-    let known_set: HashSet<u16> = known_codes.iter().copied().collect();
+    let known_set: HashSet<u16> = status_codes::STATUS_CODES.keys().copied().collect();
 
     let image_files = list_pet_images(&state.image_dir, &pet_name).await?;
     let mut available_codes = Vec::new();
@@ -251,8 +248,8 @@ pub(crate) async fn admin_pet_view(
     available_codes.sort_unstable();
     available_codes.dedup();
     let available_set: HashSet<u16> = available_codes.iter().copied().collect();
-    let missing_codes: Vec<u16> = known_codes
-        .iter()
+    let missing_codes: Vec<u16> = status_codes::STATUS_CODES
+        .keys()
         .copied()
         .filter(|code| !available_set.contains(code))
         .collect();
@@ -310,9 +307,7 @@ pub(crate) async fn admin_pet_upload_view(
         return Err(HttpetError::NotFound(pet_name));
     }
 
-    let status_map = status_codes::status_codes()
-        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
-    let Some(info) = status_map.get(&path.status_code) else {
+    let Some(info) = STATUS_CODES.get(&path.status_code) else {
         return Err(HttpetError::NotFound(path.status_code.to_string()));
     };
 

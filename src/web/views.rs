@@ -2,7 +2,6 @@ use super::csrf;
 use super::prelude::*;
 use crate::{
     db::entities::{pets, votes},
-    status_codes,
     web::{middleware::AnimalDomain, status_codes_for},
 };
 use axum::response::{Redirect, Response};
@@ -123,11 +122,9 @@ async fn pet_status_list_with_prefix(
     }
 
     let status_codes = status_codes_for(&state.image_dir, pet).await?;
-    let status_map = status_codes::status_codes()
-        .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
     let mut status_entries = Vec::with_capacity(status_codes.len());
     for code in status_codes {
-        let Some(info) = status_map.get(&code) else {
+        let Some(info) = STATUS_CODES.get(&code) else {
             return Err(HttpetError::InternalServerError(format!(
                 "Missing metadata for status code {code}"
             )));
@@ -243,7 +240,8 @@ async fn status_info_response(
         }
     }
 
-    let status_info = status_codes::status_info(status_code)
+    let status_info = STATUS_CODES
+        .get(&status_code)
         .ok_or_else(|| HttpetError::NotFound(format!("{}", json!({"status_code": status_code}))))?;
 
     let frontend_url = frontend_url_for_state(&state);
@@ -287,7 +285,8 @@ async fn preview_image_response(
         Err(err) => return Err(HttpetError::InternalServerError(err.to_string())),
     };
 
-    let status_info = status_codes::status_info(status_code)
+    let status_info = STATUS_CODES
+        .get(&status_code)
         .ok_or_else(|| HttpetError::NotFound(format!("{}", json!({"status_code": status_code}))))?;
 
     let image_base64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);

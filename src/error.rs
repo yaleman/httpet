@@ -26,6 +26,9 @@ pub enum HttpetError {
     /// When an internal server error occurs
     InternalServerError(String),
 
+    /// Failed to do serde things
+    Serde(serde_json::Error),
+
     /// NeedsVote
     NeedsVote(String, String),
 }
@@ -51,6 +54,12 @@ impl From<axum::http::Error> for HttpetError {
 impl From<url::ParseError> for HttpetError {
     fn from(err: url::ParseError) -> Self {
         HttpetError::InternalServerError(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for HttpetError {
+    fn from(err: serde_json::Error) -> Self {
+        HttpetError::Serde(err)
     }
 }
 
@@ -107,6 +116,13 @@ impl IntoResponse for HttpetError {
                 tracing::error!("Internal server error: {}", message);
                 let mut response =
                     axum::response::Response::new(axum::body::Body::from("Internal server error"));
+                *response.status_mut() = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+                response
+            }
+            HttpetError::Serde(error) => {
+                tracing::error!(error=?error, "Serialization error");
+                let mut response =
+                    axum::response::Response::new(axum::body::Body::from("Serialization error"));
                 *response.status_mut() = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
                 response
             }

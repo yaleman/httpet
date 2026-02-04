@@ -2,8 +2,9 @@ use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use base64::engine::general_purpose;
 use clap::{Parser, ValueEnum};
+use httpet::status_codes::STATUS_CODES;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -81,22 +82,6 @@ pub struct ImageData {
     revised_prompt: Option<String>,
 }
 
-fn load_status_codes() -> Result<Vec<u16>> {
-    let raw = fs::read_to_string("./data/status_codes.json")
-        .context("Failed to read data/status_codes.json")?;
-    let parsed: BTreeMap<String, serde_json::Value> =
-        serde_json::from_str(&raw).context("Failed to parse status_codes.json")?;
-    let mut codes = Vec::with_capacity(parsed.len());
-    for key in parsed.keys() {
-        let code: u16 = key
-            .parse()
-            .with_context(|| format!("Invalid status code key {key}"))?;
-        codes.push(code);
-    }
-    codes.sort_unstable();
-    Ok(codes)
-}
-
 fn existing_codes_for(animal: &str) -> Result<std::collections::HashSet<u16>> {
     let mut existing = std::collections::HashSet::new();
     let dir = PathBuf::from(format!("./images/{animal}"));
@@ -118,6 +103,7 @@ fn existing_codes_for(animal: &str) -> Result<std::collections::HashSet<u16>> {
     Ok(existing)
 }
 
+/// Prompt the user to confirm generating the next code
 fn confirm_next_code(animal: &str, code: u16) -> Result<bool> {
     let mut stdout = io::stdout();
     write!(
@@ -196,16 +182,15 @@ async fn main() -> Result<()> {
     let status_code = match args.code {
         Some(code) => code,
         None => {
-            let codes = load_status_codes()?;
             let existing = existing_codes_for(&animal)?;
-            let next = codes.into_iter().find(|code| !existing.contains(code));
+            let next = STATUS_CODES.keys().find(|code| !existing.contains(code));
             let Some(code) = next else {
                 return Err(anyhow!("No missing status codes found for {animal}"));
             };
-            if !confirm_next_code(&animal, code)? {
+            if !confirm_next_code(&animal, *code)? {
                 return Err(anyhow!("Aborted by user"));
             }
-            code
+            *code
         }
     };
     let output_filename = PathBuf::from(format!("./images/{}/{}.png", animal, status_code));

@@ -20,7 +20,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use httpet::config::setup_logging;
+use httpet::{config::setup_logging, status_codes::STATUS_CODES};
 use sea_orm_migration::MigratorTrait;
 use tokio::signal::{unix::SignalKind, unix::signal};
 use tracing::log::{error, info, warn};
@@ -34,10 +34,8 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    if let Err(err) = httpet::status_codes::init() {
-        error!("Status code metadata error: {}", err);
-        return ExitCode::FAILURE;
-    }
+    // to make sure it's loaded
+    let _ = STATUS_CODES;
 
     let db = match httpet::db::connect_db(
         cli.database_path.as_deref().unwrap_or("./db/httpet.sqlite"),

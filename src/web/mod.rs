@@ -549,6 +549,7 @@ mod tests {
     use crate::config::setup_logging;
     use crate::constants::{IMAGE_CACHE_CONTROL, TEST_BASE_DOMAIN, X_HTTPET_ANIMAL};
     use crate::db::entities::votes;
+    use crate::status_codes::STATUS_CODES;
 
     use super::*;
 
@@ -578,7 +579,6 @@ mod tests {
 
     async fn setup_test_state() -> AppState {
         let _ = setup_logging(true);
-        crate::status_codes::init().expect("load status code metadata");
         let db = crate::db::connect_test_db().await.expect("connect test db");
         crate::db::migrations::Migrator::up(db.as_ref(), None)
             .await
@@ -1019,8 +1019,7 @@ mod tests {
             .await
             .expect("create pet");
 
-        let status_map = crate::status_codes::status_codes().expect("load status codes");
-        let mut codes = status_map.keys().copied();
+        let mut codes = STATUS_CODES.keys().copied();
         let available_code = codes.next().expect("status code");
         let missing_code = codes
             .find(|code| *code != available_code)
@@ -1052,8 +1051,7 @@ mod tests {
             .await
             .expect("create pet");
 
-        let status_map = crate::status_codes::status_codes().expect("load status codes");
-        let (code, info) = status_map.iter().next().expect("status code");
+        let (code, info) = STATUS_CODES.iter().next().expect("status code");
 
         let request = Request::builder()
             .method("GET")
@@ -1187,8 +1185,7 @@ mod tests {
             .await
             .expect("create pet");
         state.write_test_image("dog", 404);
-        let status_map = crate::status_codes::status_codes().expect("load status codes");
-        let info = status_map.get(&404).expect("status info");
+        let info = STATUS_CODES.get(&404).expect("status info");
 
         let request = Request::builder()
             .method("GET")
@@ -1214,8 +1211,7 @@ mod tests {
             .await
             .expect("create pet");
         state.write_test_image("dog", 404);
-        let status_map = crate::status_codes::status_codes().expect("load status codes");
-        let info = status_map.get(&404).expect("status info");
+        let info = STATUS_CODES.get(&404).expect("status info");
 
         let request = Request::builder()
             .method("GET")
@@ -1370,7 +1366,7 @@ mod tests {
             .await
             .expect("create pet");
         state.write_test_image("dog", 200);
-        let info = crate::status_codes::status_info(200).expect("status info");
+        let info = STATUS_CODES.get(&200).expect("status info");
 
         let request = Request::builder()
             .method("GET")
@@ -1472,7 +1468,7 @@ mod tests {
             .await
             .expect("create pet");
         state.write_test_image("dog", 200);
-        let info = crate::status_codes::status_info(200).expect("status info");
+        let info = STATUS_CODES.get(&200).expect("status info");
 
         let request = Request::builder()
             .method("GET")
