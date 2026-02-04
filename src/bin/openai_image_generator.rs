@@ -365,15 +365,34 @@ fn animal_constraints(animal: &str) -> &'static str {
 
 fn gag_instructions() -> &'static str {
     // Keep it simple: one gag, no art direction.
-    r#"You generate a single strong visual gag for an illustration representing an HTTP status code using an animal.
+    r#"You generate a single strong visual gag for an illustration
+representing an HTTP status code using an animal.
+
+Some HTTP status codes represent intentional absence or non-response.
+For these codes, the visual gag must emphasize nothing happening,
+missing results, or anticlimax.
+
+Examples include (but are not limited to):
+- 204 No Content
+- 304 Not Modified
+- 205 Reset Content
+
+For these codes:
+- No implied action
+- No emotional payoff
+- No interaction that suggests something will occur
+
+Tone:
+- Dry
+- Slightly sarcastic
+- Mildly contemptuous of the situation
+- Sometimes cute, maybe wholesome
 
 Rules:
-- One joke only.
-- The joke must be understandable without text.
-- No art style decisions.
-- No camera, lens, lighting, or rendering decisions.
-- No references to memes, pop culture, or existing characters.
-- Keep it simple and visual.
+- One joke only
+- The joke must work visually
+- The joke may imply incompetence, stubbornness, bureaucracy, or apathy
+- No pop culture references
 
 Return JSON that matches the provided schema."#
 }
@@ -388,9 +407,10 @@ House style (never change):
 - Stylized 3D animated film still
 - Cinematic but clean
 - Strong visual clarity
-- Minimalism preferred
 - One readable prop at most
 - No clutter
+- Do not soften or reinterpret the attitude.
+- Preserve sarcasm, indifference, or hostility implied by the gag.
 
 Text rules:
 - The HTTP code must appear subtly and naturally in the scene
@@ -399,8 +419,7 @@ Text rules:
 Hard avoid:
 - watermarks, logos, brand marks
 - UI overlays
-- extra text (only the HTTP code)
-- messy backgrounds
+- extra text (try to limit to only the HTTP code)
 - weird anatomy or extra limbs
 
 Return JSON that matches the provided schema."#,
