@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::time::{Duration, timeout};
 use tracing::log::info;
 
 /// Generate witty HTTP status animal images.
@@ -121,13 +123,17 @@ fn tone_label(t: HttpTone) -> &'static str {
 
 static API_RESPONSE_SEQ: AtomicUsize = AtomicUsize::new(0);
 
-fn write_debug(prefix: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf> {
-    let seq = API_RESPONSE_SEQ.fetch_add(1, Ordering::Relaxed);
-    let ts = SystemTime::now()
+static START_TIMESTAMP: LazyLock<u64> = LazyLock::new(|| {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis();
-    let filename = format!("debug_{prefix}_{ts}_{seq}.{ext}");
+        .as_secs()
+});
+
+/// For debugging: write raw API responses to files with a unique name.
+fn write_debug(prefix: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf> {
+    let seq = API_RESPONSE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let filename = format!("debug_{prefix}_{ts}_{seq}.{ext}", ts = *START_TIMESTAMP);
     fs::write(&filename, bytes).with_context(|| format!("Failed to write {filename}"))?;
     Ok(PathBuf::from(filename))
 }
@@ -137,10 +143,10 @@ fn write_debug(prefix: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf> {
 /// The API may include a top-level output_text convenience field, but the
 /// canonical form is output[].content[].type == "output_text" with a "text" field.
 fn extract_responses_output_text(v: &Value) -> Option<String> {
-    if let Some(s) = v.get("output_text").and_then(|x| x.as_str()) {
-        if !s.trim().is_empty() {
-            return Some(s.to_string());
-        }
+    if let Some(s) = v.get("output_text").and_then(|x| x.as_str())
+        && !s.trim().is_empty()
+    {
+        return Some(s.to_string());
     }
 
     // Walk output -> content -> output_text blocks
@@ -176,15 +182,15 @@ fn extract_responses_output_text(v: &Value) -> Option<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn responses_json_schema<T: for<'de> Deserialize<'de>>(
+    args: &Args,
     client: &reqwest::Client,
-    api_key: &str,
     model: &str,
     instructions: &str,
     user_input: Value,
     schema_name: &str,
     schema: Value,
-    debug: bool,
 ) -> Result<(T, Option<PathBuf>, String)> {
     // Structured outputs: text.format.type = "json_schema".
     // https://platform.openai.com/docs/guides/structured-outputs
@@ -206,7 +212,7 @@ async fn responses_json_schema<T: for<'de> Deserialize<'de>>(
 
     let resp = client
         .post("https://api.openai.com/v1/responses")
-        .bearer_auth(api_key)
+        .bearer_auth(&args.openai_api_key)
         .json(&req_body)
         .send()
         .await
@@ -218,7 +224,7 @@ async fn responses_json_schema<T: for<'de> Deserialize<'de>>(
         .await
         .context("Failed reading /v1/responses body")?;
 
-    let debug_path = if debug {
+    let debug_path = if args.debug {
         Some(write_debug("responses", "json", &bytes)?)
     } else {
         None
@@ -244,10 +250,10 @@ async fn responses_json_schema<T: for<'de> Deserialize<'de>>(
 
     // Some successful Responses payloads include an "error": null field.
     // Only treat it as an error if it is present AND non-null.
-    if let Some(err) = v.get("error") {
-        if !err.is_null() {
-            return Err(anyhow!("OpenAI Responses API returned error: {err}"));
-        }
+    if let Some(err) = v.get("error")
+        && !err.is_null()
+    {
+        return Err(anyhow!("OpenAI Responses API returned error: {err}"));
     }
 
     let output_text = extract_responses_output_text(&v).ok_or_else(|| {
@@ -327,6 +333,24 @@ fn gag_eval_schema() -> Value {
     })
 }
 
+#[derive(Debug, Deserialize)]
+struct FunScore {
+    score: i32, // 1..5
+    reason: String,
+}
+
+fn fun_score_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "score": {"type": "integer", "minimum": 1, "maximum": 5},
+            "reason": {"type": "string"}
+        },
+        "required": ["score", "reason"]
+    })
+}
+
 fn prompt_schema() -> Value {
     json!({
         "type": "object",
@@ -350,12 +374,11 @@ fn animal_constraints(animal: &str) -> &'static str {
 fn gag_instructions() -> &'static str {
     r#"You generate a single strong visual gag for an illustration representing an HTTP status code using an animal.
 
-Avoid symbolic or ritualistic actions.
-Prefer blunt, dismissive, or anticlimactic behavior.
-If an object is present, it should feel incidental, not meaningful.
-
 Tone:
-- Dry, slightly sarcastic, but funny
+- Dry
+- Slightly sarcastic
+- Mildly contemptuous of the situation
+- Never wholesome, never cute for its own sake
 
 Rules:
 - One joke only.
@@ -372,6 +395,11 @@ For these codes:
 - No anticipation
 - No emotional payoff
 
+Also:
+- Avoid symbolic or ritualistic actions.
+- Prefer blunt, dismissive, or anticlimactic behavior.
+- If an object is present, it should feel incidental, not meaningful.
+
 Return JSON that matches the provided schema."#
 }
 
@@ -387,52 +415,55 @@ Reject gags that:
 Respond ONLY with JSON that matches the provided schema."#
 }
 
+fn fun_evaluator_instructions() -> &'static str {
+    r#"You are judging proposed visual gag ideas for humor and memorability for an HTTP status animal illustration.
+
+Prefer ideas that:
+- exaggerate the situation beyond realism
+- use visual shorthand and a clear, punchy gag
+- escalate the scenario (within the boundaries of the HTTP meaning)
+- would be funny even if the viewer doesn't know HTTP
+
+Avoid ideas that are:
+- calm, tasteful, minimal-for-its-own-sake
+- merely correct without being entertaining
+- "product photo" scenes or realistic daily life without a twist
+
+Respond ONLY with JSON that matches the provided schema."#
+}
+
 fn director_instructions(animal: &str) -> String {
     let mut s = String::new();
     s.push_str(
-        r#"You are an art director generating prompts for a high-quality stylized 3D animated illustration.
+        r#"You are an art director generating prompts for a funny HTTP-status cartoon illustration.
 
-House style (never change):
+House style (default):
 - Square 1:1
-- Stylized 3D animated film still
-- Cinematic but clean
-- Strong visual clarity
-- Minimalism preferred
-- One readable prop at most
-- No clutter
+- Bold, playful cartoon illustration (NOT a cinematic film still)
+- Simple shapes, exaggerated expressions, visual shorthand
+- Clean readability, but not "polished" or "realistic"
+- Physical plausibility is optional; humor wins
+- Prefer one clear gag; minimal clutter
 
 Visual language rules:
-- This is a cartoon illustration, not a film still
-- Objects may be simplified, exaggerated, or toy-like
-- Proportions may be unrealistic if it improves the joke
-- Physical plausibility is optional
-- If realism conflicts with humor, realism must lose
+- Avoid realistic appliances, realistic interiors, photoreal materials, and "product photo" vibes
+- Prefer toy-like props, simplified backgrounds, and exaggerated proportions
+- Use expressive faces and poses; the emotion should read instantly
 
 Text rules:
-- The HTTP code must appear subtly and naturally in the scene
-- No other readable words allowed
+- The HTTP code number must appear subtly and naturally in the scene (tag, label, tiny sign, badge)
+- No other readable words allowed (ONLY the number)
 
 Tone preservation:
 - Do not soften, justify, or add warmth to the gag
-- Preserve sarcasm, indifference, or hostility implied by the gag
-- If the gag implies absence, the image must contain no implied motion, reward, interaction, or pending outcome
-
-Avoid:
-- realistic appliances
-- cinematic lighting
-- photoreal materials
-- polished interior design
-
-Prefer:
-- simplified shapes
-- bold colors
-- visual shorthand
+- Preserve sarcasm, indifference, petty refusal, or annoyance implied by the gag
+- For absence codes (e.g., 204/304/205), no implied action, anticipation, reward, or payoff
 
 Hard avoid:
 - watermarks, logos, brand marks
 - UI overlays
-- extra text (only the HTTP code)
-- messy backgrounds
+- extra text (only the HTTP number)
+- messy backgrounds that distract from the gag
 - weird anatomy or extra limbs
 
 Return JSON that matches the provided schema."#,
@@ -448,29 +479,30 @@ Return JSON that matches the provided schema."#,
 }
 
 async fn generate_gag(
+    args: &Args,
     client: &reqwest::Client,
-    api_key: &str,
     model: &str,
-    animal: &str,
     code: u16,
     tone: HttpTone,
-    debug: bool,
 ) -> Result<(GagSpec, String)> {
+    eprintln!(
+        "Generating gag for attempt with tone {}...",
+        tone_label(tone)
+    );
     let user = json!({
-        "animal": animal,
+        "animal": args.animal,
         "http_code": code,
         "tone_category": tone_label(tone)
     });
 
     let (gag, _path, raw_text) = responses_json_schema::<GagSpec>(
+        args,
         client,
-        api_key,
         model,
         gag_instructions(),
         user,
         "gag_spec",
         gag_schema(),
-        debug,
     )
     .await
     .context("Gag generation failed")?;
@@ -479,31 +511,18 @@ async fn generate_gag(
 }
 
 async fn evaluate_gag(
+    args: &Args,
     client: &reqwest::Client,
-    api_key: &str,
-    model: &str,
-    animal: &str,
-    code: u16,
-    tone: HttpTone,
-    gag: &GagSpec,
-    debug: bool,
+    user_input: UserInput<'_>,
 ) -> Result<(GagEvaluation, String)> {
-    let user = json!({
-        "animal": animal,
-        "http_code": code,
-        "tone_category": tone_label(tone),
-        "gag": gag
-    });
-
     let (eval, _path, raw_text) = responses_json_schema::<GagEvaluation>(
+        args,
         client,
-        api_key,
-        model,
+        &args.text_model,
         evaluator_instructions(),
-        user,
+        user_input.as_json(),
         "gag_evaluation",
         gag_eval_schema(),
-        debug,
     )
     .await
     .context("Gag evaluation failed")?;
@@ -511,32 +530,59 @@ async fn evaluate_gag(
     Ok((eval, raw_text))
 }
 
-async fn compile_prompt(
+async fn score_fun(
+    args: &Args,
     client: &reqwest::Client,
-    api_key: &str,
-    model: &str,
-    animal: &str,
-    code: u16,
+    user_input: UserInput<'_>,
+) -> Result<(FunScore, String)> {
+    let (score, _path, raw_text) = responses_json_schema::<FunScore>(
+        args,
+        client,
+        &args.text_model,
+        fun_evaluator_instructions(),
+        user_input.as_json(),
+        "fun_score",
+        fun_score_schema(),
+    )
+    .await
+    .context("Fun scoring failed")?;
+
+    Ok((score, raw_text))
+}
+
+struct UserInput<'a> {
+    animal: &'a str,
+    status_code: u16,
     tone: HttpTone,
-    gag: &GagSpec,
-    debug: bool,
+    gag: &'a GagSpec,
+}
+
+impl UserInput<'_> {
+    fn as_json(&self) -> Value {
+        json!({
+            "animal": self.animal,
+            "http_code": self.status_code,
+            "tone_category": tone_label(self.tone),
+            "gag": self.gag
+        })
+    }
+}
+
+async fn compile_prompt(
+    args: &Args,
+    client: &reqwest::Client,
+    user_input: UserInput<'_>,
 ) -> Result<(PromptSpec, String)> {
-    let user = json!({
-        "animal": animal,
-        "http_code": code,
-        "tone_category": tone_label(tone),
-        "gag": gag
-    });
+    let user = user_input.as_json();
 
     let (prompt, _path, raw_text) = responses_json_schema::<PromptSpec>(
+        args,
         client,
-        api_key,
-        model,
-        &director_instructions(animal),
+        &args.text_model,
+        &director_instructions(user_input.animal),
         user,
         "prompt_spec",
         prompt_schema(),
-        debug,
     )
     .await
     .context("Prompt compilation failed")?;
@@ -556,10 +602,8 @@ struct ImagesGenerateRequest<'a> {
     size: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     quality: Option<&'a str>,
-    /// For GPT image models, you can request a specific output format (e.g. png, webp).
-    /// The API returns base64 in data[].b64_json.
     #[serde(skip_serializing_if = "Option::is_none")]
-    output_format: Option<&'a str>,
+    output_format: Option<&'a str>, // e.g. "png"
 }
 
 #[derive(Deserialize, Debug)]
@@ -663,7 +707,7 @@ fn load_status_codes() -> Result<Vec<u16>> {
     Ok(v)
 }
 
-fn existing_codes_for(animal: &str, out_dir: &PathBuf) -> Result<std::collections::HashSet<u16>> {
+fn existing_codes_for(animal: &str, out_dir: &Path) -> Result<std::collections::HashSet<u16>> {
     let mut set = std::collections::HashSet::new();
     let dir = out_dir.join(animal);
     if !dir.exists() {
@@ -675,10 +719,10 @@ fn existing_codes_for(animal: &str, out_dir: &PathBuf) -> Result<std::collection
         if path.extension().and_then(|e| e.to_str()) != Some("png") {
             continue;
         }
-        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-            if let Ok(code) = stem.parse::<u16>() {
-                set.insert(code);
-            }
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            && let Ok(code) = stem.parse::<u16>()
+        {
+            set.insert(code);
         }
     }
     Ok(set)
@@ -747,75 +791,108 @@ async fn main() -> Result<()> {
         output_filename.display()
     );
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("Failed to generate reqwest client")?;
 
-    // Stage 1 + 1.5: iterate gags until accepted.
-    let mut chosen_gag: Option<GagSpec> = None;
-    let mut chosen_prompt: Option<String> = None;
+    // Stage 1 + 1.5 + 1.6:
+    // Generate multiple gag candidates, reject semantically-wrong ones, then pick the funniest.
+    let mut accepted: Vec<(GagSpec, FunScore)> = Vec::new();
 
-    for attempt in 1..=args.max_attempts {
-        let (gag, gag_raw) = generate_gag(
-            &client,
-            &args.openai_api_key,
-            &args.text_model,
-            &animal,
-            status_code,
-            tone,
-            args.debug,
+    // Aim for at least 3 candidates for variety.
+    let target_candidates = std::cmp::max(3, args.max_attempts);
+
+    for attempt in 1..=target_candidates {
+        let (gag, gag_raw) = timeout(
+            Duration::from_secs(45),
+            generate_gag(&args, &client, &animal, status_code, tone),
         )
-        .await?;
+        .await??;
 
         if args.debug {
-            fs::write("debug_gag.json", &gag_raw).ok();
+            let _ = fs::write(format!("debug_gag_{attempt}.json"), &gag_raw);
         }
 
-        let (eval, eval_raw) = evaluate_gag(
-            &client,
-            &args.openai_api_key,
-            &args.text_model,
-            &animal,
-            status_code,
-            tone,
-            &gag,
-            args.debug,
-        )
-        .await?;
-
-        if args.debug {
-            fs::write("debug_eval.json", &eval_raw).ok();
-        }
-
-        if eval.verdict == "accept" {
-            eprintln!("Accepted gag on attempt {attempt}.");
-
-            let (prompt_spec, prompt_raw) = compile_prompt(
+        let (eval, eval_raw) = timeout(
+            Duration::from_secs(45),
+            evaluate_gag(
+                &args,
                 &client,
-                &args.openai_api_key,
-                &args.text_model,
-                &animal,
-                status_code,
-                tone,
-                &gag,
-                args.debug,
-            )
-            .await?;
+                UserInput {
+                    animal: &animal,
+                    status_code,
+                    tone,
+                    gag: &gag,
+                },
+            ),
+        )
+        .await??;
 
-            if args.debug {
-                fs::write("debug_compiled_prompt.json", &prompt_raw).ok();
-                fs::write("debug_compiled_prompt.txt", &prompt_spec.prompt).ok();
-            }
-
-            chosen_gag = Some(gag);
-            chosen_prompt = Some(prompt_spec.prompt);
-            break;
-        } else {
-            eprintln!("Rejected gag attempt {attempt}: {}", eval.reason);
+        if args.debug {
+            let _ = fs::write(format!("debug_eval_{attempt}.json"), &eval_raw);
         }
+
+        if eval.verdict != "accept" {
+            eprintln!("Rejected gag attempt {attempt}: {}", eval.reason);
+            continue;
+        }
+
+        // Fun score (higher is better). This is the missing "taste" bias.
+        let user_input = UserInput {
+            animal: &animal,
+            status_code,
+            tone,
+            gag: &gag,
+        };
+        let (fun, fun_raw) = score_fun(&args, &client, user_input).await?;
+
+        if args.debug {
+            let _ = fs::write(format!("debug_fun_{attempt}.json"), &fun_raw);
+        }
+
+        eprintln!(
+            "Accepted gag attempt {attempt} with fun score {}: {}",
+            fun.score, fun.reason
+        );
+        accepted.push((gag, fun));
     }
 
-    let gag =
-        chosen_gag.ok_or_else(|| anyhow!("Failed to produce an acceptable gag after retries"))?;
-    let prompt = chosen_prompt.ok_or_else(|| anyhow!("Missing compiled prompt"))?;
+    if accepted.is_empty() {
+        return Err(anyhow!(
+            "Failed to produce any acceptable gags after {target_candidates} attempts"
+        ));
+    }
+
+    // Pick the highest fun score. If tied, keep the first (deterministic).
+    accepted.sort_by(|a, b| b.1.score.cmp(&a.1.score));
+    let (gag, best_fun) = accepted
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("Unexpected empty accepted list"))?;
+
+    eprintln!("Selected gag with fun score {}.", best_fun.score);
+
+    // Stage 2: compile the final image prompt once from the chosen gag.
+    let (prompt_spec, prompt_raw) = compile_prompt(
+        &args,
+        &client,
+        UserInput {
+            animal: &animal,
+            status_code,
+            tone,
+            gag: &gag,
+        },
+    )
+    .await?;
+
+    if args.debug {
+        let _ = fs::write("debug_compiled_prompt.json", &prompt_raw);
+        let _ = fs::write("debug_compiled_prompt.txt", &prompt_spec.prompt);
+    }
+
+    let prompt = prompt_spec.prompt;
 
     // Stage 3: render
     let png_bytes = generate_image(
