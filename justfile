@@ -75,7 +75,9 @@ codespell:
     --skip='./tarpaulin-report.html' \
     --skip='./static/*' \
     --skip='./docs/*,./.git' \
-    --skip='./plugins/*'
+    --skip='./plugins/*' \
+    --skip='./debug/*' \
+    --skip='./debug_*'
 
 # Ask the clip for the judgement
 clippy:

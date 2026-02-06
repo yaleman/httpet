@@ -7,11 +7,13 @@ use serde_json::{Value, json};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{Duration, timeout};
-use tracing::log::info;
+use tracing::log::{debug, info, warn};
+
+use httpet::config;
 
 /// Generate witty HTTP status animal images.
 ///
@@ -122,6 +124,7 @@ fn tone_label(t: HttpTone) -> &'static str {
 // -----------------------------
 
 static API_RESPONSE_SEQ: AtomicUsize = AtomicUsize::new(0);
+static DEBUG_RUN_PREFIX: OnceLock<String> = OnceLock::new();
 
 static START_TIMESTAMP: LazyLock<u64> = LazyLock::new(|| {
     SystemTime::now()
@@ -133,9 +136,39 @@ static START_TIMESTAMP: LazyLock<u64> = LazyLock::new(|| {
 /// For debugging: write raw API responses to files with a unique name.
 fn write_debug(prefix: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf> {
     let seq = API_RESPONSE_SEQ.fetch_add(1, Ordering::Relaxed);
-    let filename = format!("debug_{prefix}_{ts}_{seq}.{ext}", ts = *START_TIMESTAMP);
-    fs::write(&filename, bytes).with_context(|| format!("Failed to write {filename}"))?;
-    Ok(PathBuf::from(filename))
+    let run_prefix = debug_run_prefix()?;
+    let filename = format!("{run_prefix}_{prefix}_{seq}.{ext}");
+    let path = debug_dir()?.join(filename);
+    fs::write(&path, bytes).with_context(|| format!("Failed to write {}", path.display()))?;
+    info!("Wrote debug file {}", path.display());
+    Ok(path)
+}
+
+fn debug_run_prefix() -> Result<&'static str> {
+    DEBUG_RUN_PREFIX
+        .get()
+        .map(|s| s.as_str())
+        .ok_or_else(|| anyhow!("Debug prefix not initialized"))
+}
+
+fn debug_dir() -> Result<PathBuf> {
+    let dir = PathBuf::from("debug");
+    if !dir.exists() {
+        fs::create_dir_all(&dir).with_context(|| format!("Failed to create {}", dir.display()))?;
+        info!("Created debug directory {}", dir.display());
+    }
+    Ok(dir)
+}
+
+fn debug_file_path(label: &str, ext: &str) -> Result<PathBuf> {
+    let run_prefix = debug_run_prefix()?;
+    Ok(debug_dir()?.join(format!("{run_prefix}_{label}.{ext}")))
+}
+
+fn init_debug_prefix(animal: &str, code: u16) -> String {
+    let prefix = format!("{ts}_{animal}_{code}", ts = *START_TIMESTAMP);
+    let _ = DEBUG_RUN_PREFIX.set(prefix.clone());
+    prefix
 }
 
 /// Robustly extract the text output from a /v1/responses JSON payload.
@@ -186,7 +219,6 @@ fn extract_responses_output_text(v: &Value) -> Option<String> {
 async fn responses_json_schema<T: for<'de> Deserialize<'de>>(
     args: &Args,
     client: &reqwest::Client,
-    model: &str,
     instructions: &str,
     user_input: Value,
     schema_name: &str,
@@ -194,8 +226,12 @@ async fn responses_json_schema<T: for<'de> Deserialize<'de>>(
 ) -> Result<(T, Option<PathBuf>, String)> {
     // Structured outputs: text.format.type = "json_schema".
     // https://platform.openai.com/docs/guides/structured-outputs
+    info!(
+        "Responses API request: model={}, schema={schema_name}",
+        args.text_model
+    );
     let req_body = json!({
-        "model": model,
+        "model": args.text_model,
         "instructions": instructions,
         "input": [
             {"role": "user", "content": [{"type": "input_text", "text": user_input.to_string()}]}
@@ -224,11 +260,16 @@ async fn responses_json_schema<T: for<'de> Deserialize<'de>>(
         .await
         .context("Failed reading /v1/responses body")?;
 
-    let debug_path = if args.debug {
-        Some(write_debug("responses", "json", &bytes)?)
-    } else {
-        None
-    };
+    let debug_path = Some(write_debug("responses", "json", &bytes)?);
+    info!(
+        "Responses API status={}, bytes={}, saved={}",
+        status,
+        bytes.len(),
+        debug_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
 
     if !status.is_success() {
         return Err(anyhow!(
@@ -481,12 +522,12 @@ Return JSON that matches the provided schema."#,
 async fn generate_gag(
     args: &Args,
     client: &reqwest::Client,
-    model: &str,
     code: u16,
     tone: HttpTone,
 ) -> Result<(GagSpec, String)> {
-    eprintln!(
-        "Generating gag for attempt with tone {}...",
+    info!(
+        "Generating gag: model={}, code={code}, tone={}",
+        args.text_model,
         tone_label(tone)
     );
     let user = json!({
@@ -498,7 +539,6 @@ async fn generate_gag(
     let (gag, _path, raw_text) = responses_json_schema::<GagSpec>(
         args,
         client,
-        model,
         gag_instructions(),
         user,
         "gag_spec",
@@ -515,10 +555,14 @@ async fn evaluate_gag(
     client: &reqwest::Client,
     user_input: UserInput<'_>,
 ) -> Result<(GagEvaluation, String)> {
+    info!(
+        "Evaluating gag for code={} tone={}",
+        user_input.status_code,
+        tone_label(user_input.tone)
+    );
     let (eval, _path, raw_text) = responses_json_schema::<GagEvaluation>(
         args,
         client,
-        &args.text_model,
         evaluator_instructions(),
         user_input.as_json(),
         "gag_evaluation",
@@ -535,10 +579,14 @@ async fn score_fun(
     client: &reqwest::Client,
     user_input: UserInput<'_>,
 ) -> Result<(FunScore, String)> {
+    info!(
+        "Scoring fun for code={} tone={}",
+        user_input.status_code,
+        tone_label(user_input.tone)
+    );
     let (score, _path, raw_text) = responses_json_schema::<FunScore>(
         args,
         client,
-        &args.text_model,
         fun_evaluator_instructions(),
         user_input.as_json(),
         "fun_score",
@@ -573,12 +621,16 @@ async fn compile_prompt(
     client: &reqwest::Client,
     user_input: UserInput<'_>,
 ) -> Result<(PromptSpec, String)> {
+    info!(
+        "Compiling prompt for code={} tone={}",
+        user_input.status_code,
+        tone_label(user_input.tone)
+    );
     let user = user_input.as_json();
 
     let (prompt, _path, raw_text) = responses_json_schema::<PromptSpec>(
         args,
         client,
-        &args.text_model,
         &director_instructions(user_input.animal),
         user,
         "prompt_spec",
@@ -622,26 +674,28 @@ struct ImageData {
 }
 
 async fn generate_image(
+    args: &Args,
     client: &reqwest::Client,
-    api_key: &str,
-    image_model: &str,
     prompt: &str,
-    quality: Quality,
-    debug: bool,
 ) -> Result<Vec<u8>> {
+    info!(
+        "Generating image: model={}, quality={}",
+        args.image_model,
+        args.quality.as_images_quality()
+    );
     let req = ImagesGenerateRequest {
-        model: image_model,
+        model: &args.image_model,
         prompt,
         n: 1,
         size: "1024x1024",
-        quality: Some(quality.as_images_quality()),
+        quality: Some(args.quality.as_images_quality()),
         // GPT image models return base64 in data[].b64_json; request PNG bytes.
         output_format: Some("png"),
     };
 
     let resp = client
         .post("https://api.openai.com/v1/images/generations")
-        .bearer_auth(api_key)
+        .bearer_auth(&args.openai_api_key)
         .json(&req)
         .send()
         .await
@@ -649,9 +703,13 @@ async fn generate_image(
 
     let status = resp.status();
     let bytes = resp.bytes().await.context("Failed reading images body")?;
-    if debug {
-        let _ = write_debug("images", "json", &bytes);
-    }
+    let debug_path = write_debug("images_generate", "json", &bytes)?;
+    info!(
+        "Images API status={}, bytes={}, saved={}",
+        status,
+        bytes.len(),
+        debug_path.display()
+    );
 
     if !status.is_success() {
         return Err(anyhow!(
@@ -670,7 +728,7 @@ async fn generate_image(
         .ok_or_else(|| anyhow!("No image data returned"))?;
 
     if let Some(rp) = first.revised_prompt {
-        eprintln!("Revised prompt from model: {rp}");
+        info!("Revised prompt from model: {rp}");
     }
 
     if let Some(b64) = first.b64_json {
@@ -679,14 +737,30 @@ async fn generate_image(
             .context("Failed to base64-decode PNG")?;
         Ok(png)
     } else if let Some(url) = first.url {
-        let png = client
+        info!("Downloading image from url");
+        let resp = client
             .get(url)
             .send()
             .await
-            .context("Failed to download image")?
+            .context("Failed to download image")?;
+        let status = resp.status();
+        let png = resp
             .bytes()
             .await
             .context("Failed to read downloaded image")?;
+        let download_path = write_debug("images_download", "png", &png)?;
+        info!(
+            "Image download status={}, bytes={}, saved={}",
+            status,
+            png.len(),
+            download_path.display()
+        );
+        if !status.is_success() {
+            return Err(anyhow!(
+                "OpenAI Images download error {status} (saved to {})",
+                download_path.display()
+            ));
+        }
         Ok(png.to_vec())
     } else {
         Err(anyhow!("Image response missing b64_json and url"))
@@ -748,28 +822,46 @@ fn confirm_next_code(animal: &str, code: u16) -> Result<bool> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    config::setup_logging(args.debug).context("Failed to initialize logging")?;
     let animal = args.animal.to_ascii_lowercase();
+
+    info!(
+        "Starting image generator: animal={}, code_arg={:?}, text_model={}, image_model={}, quality={}, debug={}, max_attempts={}",
+        animal,
+        args.code,
+        args.text_model,
+        args.image_model,
+        args.quality.as_images_quality(),
+        args.debug,
+        args.max_attempts
+    );
 
     let status_code = match args.code {
         Some(c) => c,
         None => {
+            info!("No code provided; scanning for next missing status code");
             let codes = load_status_codes()?;
             let existing = existing_codes_for(&animal, &args.out_dir)?;
+            info!("Found {} existing images for {}", existing.len(), animal);
             let next = codes.into_iter().find(|c| !existing.contains(c));
             let Some(code) = next else {
                 return Err(anyhow!("No missing status codes found for {animal}"));
             };
+            info!("Next missing status code appears to be {code}");
             if !confirm_next_code(&animal, code)? {
                 return Err(anyhow!("Aborted"));
             }
             code
         }
     };
+    let debug_prefix = init_debug_prefix(&animal, status_code);
+    info!("Debug prefix set to {debug_prefix}");
 
     let output_filename = args
         .out_dir
         .join(&animal)
         .join(format!("{status_code}.png"));
+    info!("Output file will be {}", output_filename.display());
     if output_filename.exists() {
         return Err(anyhow!(
             "Image already exists: {}",
@@ -803,17 +895,21 @@ async fn main() -> Result<()> {
 
     // Aim for at least 3 candidates for variety.
     let target_candidates = std::cmp::max(3, args.max_attempts);
+    info!("Target gag attempts: {target_candidates}");
 
     for attempt in 1..=target_candidates {
+        info!("Gag attempt {attempt}/{target_candidates} starting");
         let (gag, gag_raw) = timeout(
             Duration::from_secs(45),
-            generate_gag(&args, &client, &animal, status_code, tone),
+            generate_gag(&args, &client, status_code, tone),
         )
         .await??;
 
-        if args.debug {
-            let _ = fs::write(format!("debug_gag_{attempt}.json"), &gag_raw);
-        }
+        let gag_path = debug_file_path(&format!("gag_attempt_{attempt}"), "json")?;
+        fs::write(&gag_path, &gag_raw)
+            .with_context(|| format!("Failed to write {}", gag_path.display()))?;
+        info!("Wrote gag spec to {}", gag_path.display());
+        debug!("Gag core_joke: {}", gag.core_joke);
 
         let (eval, eval_raw) = timeout(
             Duration::from_secs(45),
@@ -830,14 +926,16 @@ async fn main() -> Result<()> {
         )
         .await??;
 
-        if args.debug {
-            let _ = fs::write(format!("debug_eval_{attempt}.json"), &eval_raw);
-        }
+        let eval_path = debug_file_path(&format!("eval_attempt_{attempt}"), "json")?;
+        fs::write(&eval_path, &eval_raw)
+            .with_context(|| format!("Failed to write {}", eval_path.display()))?;
+        info!("Wrote evaluation to {}", eval_path.display());
 
         if eval.verdict != "accept" {
-            eprintln!("Rejected gag attempt {attempt}: {}", eval.reason);
+            warn!("Rejected gag attempt {attempt}: {}", eval.reason);
             continue;
         }
+        info!("Accepted gag attempt {attempt}");
 
         // Fun score (higher is better). This is the missing "taste" bias.
         let user_input = UserInput {
@@ -846,13 +944,18 @@ async fn main() -> Result<()> {
             tone,
             gag: &gag,
         };
-        let (fun, fun_raw) = score_fun(&args, &client, user_input).await?;
+        let (fun, fun_raw) = timeout(
+            Duration::from_secs(45),
+            score_fun(&args, &client, user_input),
+        )
+        .await??;
 
-        if args.debug {
-            let _ = fs::write(format!("debug_fun_{attempt}.json"), &fun_raw);
-        }
+        let fun_path = debug_file_path(&format!("fun_attempt_{attempt}"), "json")?;
+        fs::write(&fun_path, &fun_raw)
+            .with_context(|| format!("Failed to write {}", fun_path.display()))?;
+        info!("Wrote fun score to {}", fun_path.display());
 
-        eprintln!(
+        info!(
             "Accepted gag attempt {attempt} with fun score {}: {}",
             fun.score, fun.reason
         );
@@ -872,7 +975,7 @@ async fn main() -> Result<()> {
         .next()
         .ok_or_else(|| anyhow!("Unexpected empty accepted list"))?;
 
-    eprintln!("Selected gag with fun score {}.", best_fun.score);
+    info!("Selected gag with fun score {}.", best_fun.score);
 
     // Stage 2: compile the final image prompt once from the chosen gag.
     let (prompt_spec, prompt_raw) = compile_prompt(
@@ -887,37 +990,42 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    if args.debug {
-        let _ = fs::write("debug_compiled_prompt.json", &prompt_raw);
-        let _ = fs::write("debug_compiled_prompt.txt", &prompt_spec.prompt);
-    }
+    let compiled_prompt_json = debug_file_path("compiled_prompt", "json")?;
+    fs::write(&compiled_prompt_json, &prompt_raw)
+        .with_context(|| format!("Failed to write {}", compiled_prompt_json.display()))?;
+    let compiled_prompt_txt = debug_file_path("compiled_prompt", "txt")?;
+    fs::write(&compiled_prompt_txt, &prompt_spec.prompt)
+        .with_context(|| format!("Failed to write {}", compiled_prompt_txt.display()))?;
+    info!(
+        "Wrote compiled prompt debug files: {} and {}",
+        compiled_prompt_json.display(),
+        compiled_prompt_txt.display()
+    );
+    debug!("Prompt length: {}", prompt_spec.prompt.len());
 
     let prompt = prompt_spec.prompt;
 
     // Stage 3: render
     let png_bytes = generate_image(
+        &args,
         &client,
-        &args.openai_api_key,
-        &args.image_model,
         &prompt,
-        args.quality,
-        args.debug,
     )
     .await?;
 
     fs::write(&output_filename, &png_bytes)
         .with_context(|| format!("Failed to write image to {}", output_filename.display()))?;
 
-    eprintln!("Saved: {}", output_filename.display());
+    info!("Saved: {}", output_filename.display());
 
-    // Optional: store the gag spec next to it for later auditing
-    if args.debug {
-        let meta_path = output_filename.with_extension("gag.json");
-        let _ = fs::write(
-            &meta_path,
-            serde_json::to_string_pretty(&gag).unwrap_or_default(),
-        );
-    }
+    // Store the gag spec for later auditing
+    let meta_path = debug_file_path("gag", "json")?;
+    fs::write(
+        &meta_path,
+        serde_json::to_string_pretty(&gag).unwrap_or_default(),
+    )
+    .with_context(|| format!("Failed to write {}", meta_path.display()))?;
+    info!("Wrote gag metadata to {}", meta_path.display());
 
     Ok(())
 }
