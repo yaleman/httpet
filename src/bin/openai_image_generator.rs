@@ -5,12 +5,13 @@ use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs;
+use std::future::Future;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::time::{Duration, timeout};
+use std::sync::{LazyLock, OnceLock};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tokio::time::{Duration, sleep, timeout};
 use tracing::log::{debug, info, warn};
 
 use httpet::config;
@@ -60,6 +61,22 @@ struct Args {
     /// Max gag attempts before giving up
     #[arg(long, default_value_t = 4)]
     max_attempts: usize,
+
+    /// Timeout (seconds) for Responses API calls
+    #[arg(long, default_value_t = 90)]
+    responses_timeout_secs: u64,
+
+    /// Retries for Responses API calls (non-image)
+    #[arg(long, default_value_t = 2)]
+    responses_retries: usize,
+
+    /// Backoff base in milliseconds between Responses retries (non-image)
+    #[arg(long, default_value_t = 750)]
+    responses_backoff_ms: u64,
+
+    /// Timeout (seconds) for Images API calls
+    #[arg(long, default_value_t = 120)]
+    images_timeout_secs: u64,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
@@ -213,6 +230,94 @@ fn extract_responses_output_text(v: &Value) -> Option<String> {
     } else {
         Some(parts.join(""))
     }
+}
+
+async fn with_timeout<T, F>(label: &str, duration: Duration, fut: F) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    let start = Instant::now();
+    match timeout(duration, fut).await {
+        Ok(res) => {
+            info!("{label} completed in {}ms", start.elapsed().as_millis());
+            res
+        }
+        Err(_) => {
+            warn!("{label} timed out after {}s", duration.as_secs());
+            Err(anyhow!(TimeoutError::new(label, duration)))
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TimeoutError {
+    label: String,
+    duration: Duration,
+}
+
+impl TimeoutError {
+    fn new(label: &str, duration: Duration) -> Self {
+        Self {
+            label: label.to_string(),
+            duration,
+        }
+    }
+}
+
+impl std::fmt::Display for TimeoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} timed out after {}s",
+            self.label,
+            self.duration.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for TimeoutError {}
+
+async fn with_retries<T, F, Fut>(
+    label: &str,
+    duration: Duration,
+    max_retries: usize,
+    backoff: Duration,
+    mut op: F,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let attempts = max_retries + 1;
+    for attempt in 1..=attempts {
+        info!("{label} attempt {attempt}/{attempts}");
+        match with_timeout(label, duration, op()).await {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                let is_timeout = err.downcast_ref::<TimeoutError>().is_some();
+                if !is_timeout {
+                    warn!("{label} failed without timeout: {err}");
+                    return Err(err);
+                }
+                if attempt >= attempts {
+                    return Err(err);
+                }
+                let base_ms = backoff.as_millis().min(u128::from(u64::MAX)) as u64;
+                let shift = (attempt - 1) as u32;
+                let multiplier = if shift >= 63 { u64::MAX } else { 1u64 << shift };
+                let delay_ms = base_ms.saturating_mul(multiplier);
+                let delay = Duration::from_millis(delay_ms);
+                warn!(
+                    "{label} timed out, retrying in {}ms (attempt {}/{})",
+                    delay_ms,
+                    attempt + 1,
+                    attempts
+                );
+                sleep(delay).await;
+            }
+        }
+    }
+    Err(anyhow!("{label} failed after {attempts} attempts"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -480,15 +585,16 @@ fn director_instructions(animal: &str) -> String {
 
 House style (default):
 - Square 1:1
-- Bold, playful cartoon illustration (NOT a cinematic film still)
-- Simple shapes, exaggerated expressions, visual shorthand
-- Clean readability, but not "polished" or "realistic"
+- Semi-realistic 3D illustration (Pixar-ish, NOT a cinematic film still)
+- Dramatic lighting with strong highlights and soft shadows
+- Expressive faces and readable silhouettes, but with richer materials
+- Clean readability, polished 3D shading, not photoreal
 - Physical plausibility is optional; humor wins
 - Prefer one clear gag; minimal clutter
 
 Visual language rules:
-- Avoid realistic appliances, realistic interiors, photoreal materials, and "product photo" vibes
-- Prefer toy-like props, simplified backgrounds, and exaggerated proportions
+- Avoid realistic appliances, realistic interiors, and "product photo" vibes
+- Prefer tactile 3D props, simplified backgrounds, and exaggerated proportions
 - Use expressive faces and poses; the emotion should read instantly
 
 Text rules:
@@ -673,15 +779,12 @@ struct ImageData {
     revised_prompt: Option<String>,
 }
 
-async fn generate_image(
-    args: &Args,
-    client: &reqwest::Client,
-    prompt: &str,
-) -> Result<Vec<u8>> {
+async fn generate_image(args: &Args, client: &reqwest::Client, prompt: &str) -> Result<Vec<u8>> {
     info!(
-        "Generating image: model={}, quality={}",
+        "Generating image: model={}, quality={}, prompt='{}'",
         args.image_model,
-        args.quality.as_images_quality()
+        args.quality.as_images_quality(),
+        prompt
     );
     let req = ImagesGenerateRequest {
         model: &args.image_model,
@@ -835,6 +938,13 @@ async fn main() -> Result<()> {
         args.debug,
         args.max_attempts
     );
+    info!(
+        "Timeouts: responses={}s (retries={}, backoff={}ms), images={}s",
+        args.responses_timeout_secs,
+        args.responses_retries,
+        args.responses_backoff_ms,
+        args.images_timeout_secs
+    );
 
     let status_code = match args.code {
         Some(c) => c,
@@ -883,8 +993,10 @@ async fn main() -> Result<()> {
         output_filename.display()
     );
 
+    let request_timeout_secs =
+        std::cmp::max(args.responses_timeout_secs, args.images_timeout_secs) + 15;
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(request_timeout_secs))
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()
         .context("Failed to generate reqwest client")?;
@@ -899,11 +1011,14 @@ async fn main() -> Result<()> {
 
     for attempt in 1..=target_candidates {
         info!("Gag attempt {attempt}/{target_candidates} starting");
-        let (gag, gag_raw) = timeout(
-            Duration::from_secs(45),
-            generate_gag(&args, &client, status_code, tone),
+        let (gag, gag_raw) = with_retries(
+            "Gag generation",
+            Duration::from_secs(args.responses_timeout_secs),
+            args.responses_retries,
+            Duration::from_millis(args.responses_backoff_ms),
+            || generate_gag(&args, &client, status_code, tone),
         )
-        .await??;
+        .await?;
 
         let gag_path = debug_file_path(&format!("gag_attempt_{attempt}"), "json")?;
         fs::write(&gag_path, &gag_raw)
@@ -911,20 +1026,25 @@ async fn main() -> Result<()> {
         info!("Wrote gag spec to {}", gag_path.display());
         debug!("Gag core_joke: {}", gag.core_joke);
 
-        let (eval, eval_raw) = timeout(
-            Duration::from_secs(45),
-            evaluate_gag(
-                &args,
-                &client,
-                UserInput {
-                    animal: &animal,
-                    status_code,
-                    tone,
-                    gag: &gag,
-                },
-            ),
+        let (eval, eval_raw) = with_retries(
+            "Gag evaluation",
+            Duration::from_secs(args.responses_timeout_secs),
+            args.responses_retries,
+            Duration::from_millis(args.responses_backoff_ms),
+            || {
+                evaluate_gag(
+                    &args,
+                    &client,
+                    UserInput {
+                        animal: &animal,
+                        status_code,
+                        tone,
+                        gag: &gag,
+                    },
+                )
+            },
         )
-        .await??;
+        .await?;
 
         let eval_path = debug_file_path(&format!("eval_attempt_{attempt}"), "json")?;
         fs::write(&eval_path, &eval_raw)
@@ -938,17 +1058,25 @@ async fn main() -> Result<()> {
         info!("Accepted gag attempt {attempt}");
 
         // Fun score (higher is better). This is the missing "taste" bias.
-        let user_input = UserInput {
-            animal: &animal,
-            status_code,
-            tone,
-            gag: &gag,
-        };
-        let (fun, fun_raw) = timeout(
-            Duration::from_secs(45),
-            score_fun(&args, &client, user_input),
+        let (fun, fun_raw) = with_retries(
+            "Fun scoring",
+            Duration::from_secs(args.responses_timeout_secs),
+            args.responses_retries,
+            Duration::from_millis(args.responses_backoff_ms),
+            || {
+                score_fun(
+                    &args,
+                    &client,
+                    UserInput {
+                        animal: &animal,
+                        status_code,
+                        tone,
+                        gag: &gag,
+                    },
+                )
+            },
         )
-        .await??;
+        .await?;
 
         let fun_path = debug_file_path(&format!("fun_attempt_{attempt}"), "json")?;
         fs::write(&fun_path, &fun_raw)
@@ -978,14 +1106,22 @@ async fn main() -> Result<()> {
     info!("Selected gag with fun score {}.", best_fun.score);
 
     // Stage 2: compile the final image prompt once from the chosen gag.
-    let (prompt_spec, prompt_raw) = compile_prompt(
-        &args,
-        &client,
-        UserInput {
-            animal: &animal,
-            status_code,
-            tone,
-            gag: &gag,
+    let (prompt_spec, prompt_raw) = with_retries(
+        "Prompt compilation",
+        Duration::from_secs(args.responses_timeout_secs),
+        args.responses_retries,
+        Duration::from_millis(args.responses_backoff_ms),
+        || {
+            compile_prompt(
+                &args,
+                &client,
+                UserInput {
+                    animal: &animal,
+                    status_code,
+                    tone,
+                    gag: &gag,
+                },
+            )
         },
     )
     .await?;
@@ -1006,10 +1142,10 @@ async fn main() -> Result<()> {
     let prompt = prompt_spec.prompt;
 
     // Stage 3: render
-    let png_bytes = generate_image(
-        &args,
-        &client,
-        &prompt,
+    let png_bytes = with_timeout(
+        "Image generation",
+        Duration::from_secs(args.images_timeout_secs),
+        generate_image(&args, &client, &prompt),
     )
     .await?;
 

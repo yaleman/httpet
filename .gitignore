@@ -7,3 +7,5 @@ build_rs_cov.profraw
 /debug_*.json
 /debug_*.bin
 /debug*.txt
+debug/
+177*.json

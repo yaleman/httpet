@@ -10,7 +10,10 @@ pub fn setup_logging(debug: bool) -> Result<(), Box<std::io::Error>> {
         LevelFilter::Info
     };
 
-    let mut logger = simple_logger::SimpleLogger::new().with_level(level);
+    let mut logger = simple_logger::SimpleLogger::new()
+        .with_level(level)
+        .with_module_level("h2", LevelFilter::Info)
+        .with_module_level("hyper_util", LevelFilter::Info);
     if !debug {
         logger = logger.with_module_level("tracing", LevelFilter::Warn);
     }
