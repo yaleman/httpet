@@ -11,10 +11,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tokio::task::JoinSet;
 use tokio::time::{Duration, sleep, timeout};
 use tracing::log::{debug, info, warn};
 
 use httpet::config;
+use httpet::status_codes::STATUS_CODES;
 
 /// Generate witty HTTP status animal images.
 ///
@@ -22,7 +24,7 @@ use httpet::config;
 ///   openai_image_generator goat 418
 ///
 /// If you omit the code, it will pick the next missing code for that animal (prompting first).
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "openai_image_generator")]
 #[command(
     about = "Generate witty HTTP status animal images via an iterative text->prompt pipeline + Images API"
@@ -77,6 +79,27 @@ struct Args {
     /// Timeout (seconds) for Images API calls
     #[arg(long, default_value_t = 120)]
     images_timeout_secs: u64,
+}
+
+#[derive(Clone, Debug)]
+struct StatusContext {
+    name: String,
+    summary: String,
+}
+
+fn status_context(code: u16) -> StatusContext {
+    if let Some(info) = STATUS_CODES.get(&code) {
+        StatusContext {
+            name: info.name.clone(),
+            summary: info.summary.clone(),
+        }
+    } else {
+        warn!("Missing status code metadata for {code}; using fallback");
+        StatusContext {
+            name: "Unknown Status".to_string(),
+            summary: "No summary available.".to_string(),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
@@ -542,6 +565,7 @@ For these codes:
 - No emotional payoff
 
 Also:
+- You are given the status code name and summary. The gag must convey a humorous or absurd situation caused or inspired by that meaning.
 - Avoid symbolic or ritualistic actions.
 - Prefer blunt, dismissive, or anticlimactic behavior.
 - If an object is present, it should feel incidental, not meaningful.
@@ -557,6 +581,7 @@ Reject gags that:
 - imply emotional payoff where none should exist
 - introduce anticipation for absence-based codes (e.g. 204)
 - would confuse someone familiar with HTTP semantics
+- fail to be caused or inspired by the provided status name or summary
 
 Respond ONLY with JSON that matches the provided schema."#
 }
@@ -583,6 +608,8 @@ fn director_instructions(animal: &str) -> String {
     s.push_str(
         r#"You are an art director generating prompts for a funny HTTP-status cartoon illustration.
 
+The prompt must convey a humorous or absurd situation caused or inspired by the provided status name and summary.
+
 House style (default):
 - Square 1:1
 - Semi-realistic 3D illustration (Pixar-ish, NOT a cinematic film still)
@@ -599,7 +626,8 @@ Visual language rules:
 
 Text rules:
 - The HTTP code number must appear subtly and naturally in the scene (tag, label, tiny sign, badge)
-- No other readable words allowed (ONLY the number)
+- You may include one short status label derived from the status name (e.g., "Forbidden", "Not Found")
+- No other readable words allowed beyond the HTTP number and that single short label
 
 Tone preservation:
 - Do not soften, justify, or add warmth to the gag
@@ -609,7 +637,7 @@ Tone preservation:
 Hard avoid:
 - watermarks, logos, brand marks
 - UI overlays
-- extra text (only the HTTP number)
+- extra text beyond the HTTP number and the single short status label
 - messy backgrounds that distract from the gag
 - weird anatomy or extra limbs
 
@@ -630,6 +658,7 @@ async fn generate_gag(
     client: &reqwest::Client,
     code: u16,
     tone: HttpTone,
+    status: &StatusContext,
 ) -> Result<(GagSpec, String)> {
     info!(
         "Generating gag: model={}, code={code}, tone={}",
@@ -639,6 +668,8 @@ async fn generate_gag(
     let user = json!({
         "animal": args.animal,
         "http_code": code,
+        "status_name": status.name.as_str(),
+        "status_summary": status.summary.as_str(),
         "tone_category": tone_label(tone)
     });
 
@@ -707,6 +738,8 @@ async fn score_fun(
 struct UserInput<'a> {
     animal: &'a str,
     status_code: u16,
+    status_name: &'a str,
+    status_summary: &'a str,
     tone: HttpTone,
     gag: &'a GagSpec,
 }
@@ -716,6 +749,8 @@ impl UserInput<'_> {
         json!({
             "animal": self.animal,
             "http_code": self.status_code,
+            "status_name": self.status_name,
+            "status_summary": self.status_summary,
             "tone_category": tone_label(self.tone),
             "gag": self.gag
         })
@@ -870,6 +905,100 @@ async fn generate_image(args: &Args, client: &reqwest::Client, prompt: &str) -> 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn gag_attempt_pipeline(
+    attempt: usize,
+    total_attempts: usize,
+    args: Args,
+    client: reqwest::Client,
+    animal: String,
+    status: StatusContext,
+    status_code: u16,
+    tone: HttpTone,
+) -> Result<Option<(GagSpec, FunScore)>> {
+    info!("Gag attempt {attempt}/{total_attempts} starting");
+    let (gag, gag_raw) = with_retries(
+        "Gag generation",
+        Duration::from_secs(args.responses_timeout_secs),
+        args.responses_retries,
+        Duration::from_millis(args.responses_backoff_ms),
+        || generate_gag(&args, &client, status_code, tone, &status),
+    )
+    .await?;
+
+    let gag_path = debug_file_path(&format!("gag_attempt_{attempt}"), "json")?;
+    fs::write(&gag_path, &gag_raw)
+        .with_context(|| format!("Failed to write {}", gag_path.display()))?;
+    info!("Wrote gag spec to {}", gag_path.display());
+    debug!("Gag core_joke: {}", gag.core_joke);
+
+    let (eval, eval_raw) = with_retries(
+        "Gag evaluation",
+        Duration::from_secs(args.responses_timeout_secs),
+        args.responses_retries,
+        Duration::from_millis(args.responses_backoff_ms),
+        || {
+            evaluate_gag(
+                &args,
+                &client,
+                UserInput {
+                    animal: &animal,
+                    status_code,
+                    status_name: &status.name,
+                    status_summary: &status.summary,
+                    tone,
+                    gag: &gag,
+                },
+            )
+        },
+    )
+    .await?;
+
+    let eval_path = debug_file_path(&format!("eval_attempt_{attempt}"), "json")?;
+    fs::write(&eval_path, &eval_raw)
+        .with_context(|| format!("Failed to write {}", eval_path.display()))?;
+    info!("Wrote evaluation to {}", eval_path.display());
+
+    if eval.verdict != "accept" {
+        warn!("Rejected gag attempt {attempt}: {}", eval.reason);
+        return Ok(None);
+    }
+    info!("Accepted gag attempt {attempt}");
+
+    let (fun, fun_raw) = with_retries(
+        "Fun scoring",
+        Duration::from_secs(args.responses_timeout_secs),
+        args.responses_retries,
+        Duration::from_millis(args.responses_backoff_ms),
+        || {
+            score_fun(
+                &args,
+                &client,
+                UserInput {
+                    animal: &animal,
+                    status_code,
+                    status_name: &status.name,
+                    status_summary: &status.summary,
+                    tone,
+                    gag: &gag,
+                },
+            )
+        },
+    )
+    .await?;
+
+    let fun_path = debug_file_path(&format!("fun_attempt_{attempt}"), "json")?;
+    fs::write(&fun_path, &fun_raw)
+        .with_context(|| format!("Failed to write {}", fun_path.display()))?;
+    info!("Wrote fun score to {}", fun_path.display());
+
+    info!(
+        "Accepted gag attempt {attempt} with fun score {}: {}",
+        fun.score, fun.reason
+    );
+    Ok(Some((gag, fun)))
+}
+
 // -----------------------------
 // Status code selection helpers (optional)
 // -----------------------------
@@ -984,6 +1113,11 @@ async fn main() -> Result<()> {
     }
 
     let tone = classify_http_code(status_code);
+    let status = status_context(status_code);
+    info!(
+        "Status context: code={}, name=\"{}\" summary=\"{}\"",
+        status_code, status.name, status.summary
+    );
 
     info!(
         "Generating: animal={animal}, code={status_code}, tone={}, text_model={}, image_model={}, out={}",
@@ -1009,85 +1143,37 @@ async fn main() -> Result<()> {
     let target_candidates = std::cmp::max(3, args.max_attempts);
     info!("Target gag attempts: {target_candidates}");
 
+    let mut join_set = JoinSet::new();
     for attempt in 1..=target_candidates {
-        info!("Gag attempt {attempt}/{target_candidates} starting");
-        let (gag, gag_raw) = with_retries(
-            "Gag generation",
-            Duration::from_secs(args.responses_timeout_secs),
-            args.responses_retries,
-            Duration::from_millis(args.responses_backoff_ms),
-            || generate_gag(&args, &client, status_code, tone),
-        )
-        .await?;
+        let args = args.clone();
+        let client = client.clone();
+        let animal = animal.clone();
+        let status = status.clone();
+        join_set.spawn(gag_attempt_pipeline(
+            attempt,
+            target_candidates,
+            args,
+            client,
+            animal,
+            status,
+            status_code,
+            tone,
+        ));
+    }
 
-        let gag_path = debug_file_path(&format!("gag_attempt_{attempt}"), "json")?;
-        fs::write(&gag_path, &gag_raw)
-            .with_context(|| format!("Failed to write {}", gag_path.display()))?;
-        info!("Wrote gag spec to {}", gag_path.display());
-        debug!("Gag core_joke: {}", gag.core_joke);
-
-        let (eval, eval_raw) = with_retries(
-            "Gag evaluation",
-            Duration::from_secs(args.responses_timeout_secs),
-            args.responses_retries,
-            Duration::from_millis(args.responses_backoff_ms),
-            || {
-                evaluate_gag(
-                    &args,
-                    &client,
-                    UserInput {
-                        animal: &animal,
-                        status_code,
-                        tone,
-                        gag: &gag,
-                    },
-                )
-            },
-        )
-        .await?;
-
-        let eval_path = debug_file_path(&format!("eval_attempt_{attempt}"), "json")?;
-        fs::write(&eval_path, &eval_raw)
-            .with_context(|| format!("Failed to write {}", eval_path.display()))?;
-        info!("Wrote evaluation to {}", eval_path.display());
-
-        if eval.verdict != "accept" {
-            warn!("Rejected gag attempt {attempt}: {}", eval.reason);
-            continue;
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok(Some(item))) => accepted.push(item),
+            Ok(Ok(None)) => {}
+            Ok(Err(err)) => {
+                join_set.abort_all();
+                return Err(err);
+            }
+            Err(err) => {
+                join_set.abort_all();
+                return Err(anyhow!("Gag attempt task failed: {err}"));
+            }
         }
-        info!("Accepted gag attempt {attempt}");
-
-        // Fun score (higher is better). This is the missing "taste" bias.
-        let (fun, fun_raw) = with_retries(
-            "Fun scoring",
-            Duration::from_secs(args.responses_timeout_secs),
-            args.responses_retries,
-            Duration::from_millis(args.responses_backoff_ms),
-            || {
-                score_fun(
-                    &args,
-                    &client,
-                    UserInput {
-                        animal: &animal,
-                        status_code,
-                        tone,
-                        gag: &gag,
-                    },
-                )
-            },
-        )
-        .await?;
-
-        let fun_path = debug_file_path(&format!("fun_attempt_{attempt}"), "json")?;
-        fs::write(&fun_path, &fun_raw)
-            .with_context(|| format!("Failed to write {}", fun_path.display()))?;
-        info!("Wrote fun score to {}", fun_path.display());
-
-        info!(
-            "Accepted gag attempt {attempt} with fun score {}: {}",
-            fun.score, fun.reason
-        );
-        accepted.push((gag, fun));
     }
 
     if accepted.is_empty() {
@@ -1118,6 +1204,8 @@ async fn main() -> Result<()> {
                 UserInput {
                     animal: &animal,
                     status_code,
+                    status_name: &status.name,
+                    status_summary: &status.summary,
                     tone,
                     gag: &gag,
                 },

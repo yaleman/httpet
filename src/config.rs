@@ -10,12 +10,13 @@ pub fn setup_logging(debug: bool) -> Result<(), Box<std::io::Error>> {
         LevelFilter::Info
     };
 
-    let mut logger = simple_logger::SimpleLogger::new()
-        .with_level(level)
-        .with_module_level("h2", LevelFilter::Info)
-        .with_module_level("hyper_util", LevelFilter::Info);
+    let mut logger = simple_logger::SimpleLogger::new().with_level(level);
     if !debug {
-        logger = logger.with_module_level("tracing", LevelFilter::Warn);
+        logger = logger
+            .with_module_level("tracing", LevelFilter::Warn)
+            .with_module_level("rustls", LevelFilter::Info)
+            .with_module_level("hyper_util", LevelFilter::Info)
+            .with_module_level("h2", LevelFilter::Info);
     }
     logger.init().map_err(|err| {
         eprintln!("Failed to initialize logger: {}", err);
