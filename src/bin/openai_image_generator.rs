@@ -626,8 +626,8 @@ Visual language rules:
 
 Text rules:
 - The HTTP code number must appear subtly and naturally in the scene (tag, label, tiny sign, badge)
-- You may include one short status label derived from the status name (e.g., "Forbidden", "Not Found")
-- No other readable words allowed beyond the HTTP number and that single short label
+- You may include one short status phrase derived from the status name or summary (up to 6 words)
+- No other readable words allowed beyond the HTTP number and that single short phrase
 
 Tone preservation:
 - Do not soften, justify, or add warmth to the gag
@@ -637,7 +637,7 @@ Tone preservation:
 Hard avoid:
 - watermarks, logos, brand marks
 - UI overlays
-- extra text beyond the HTTP number and the single short status label
+- extra text beyond the HTTP number and the single short status phrase
 - messy backgrounds that distract from the gag
 - weird anatomy or extra limbs
 
