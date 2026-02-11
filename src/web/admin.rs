@@ -11,6 +11,7 @@ use axum::extract::{Form, Multipart, Path, State};
 use axum::http::HeaderMap;
 use axum::response::{Redirect, Response};
 use chrono::{Duration, NaiveDate, Utc};
+use image::ImageDecoder;
 use sea_orm::sea_query::{Alias, Expr, Query};
 use sea_orm::{
     ColumnTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, StatementBuilder,
@@ -588,31 +589,39 @@ pub(crate) async fn delete_pet_post(
     Ok(Redirect::to("/admin/"))
 }
 
-/// Ensures image bytes are a valid JPEG, converting if possible.
+/// Ensures image bytes decode cleanly, applies orientation, and re-encodes to JPEG.
+/// Re-encoding strips uploaded metadata (EXIF/XMP/etc) from the output file.
 fn normalize_image_to_jpeg(bytes: &[u8]) -> Result<Vec<u8>, HttpetError> {
     if bytes.len() < 4 {
         debug!("Image is too short");
         return Err(HttpetError::BadRequest);
     }
 
-    let reader = image::ImageReader::new(Cursor::new(bytes))
+    let mut decoder = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|err| {
             debug!("Failed to guess image format: {}", err);
             HttpetError::BadRequest
+        })?
+        .into_decoder()
+        .map_err(|err| {
+            debug!("Failed to create decoder: {}", err);
+            HttpetError::BadRequest
         })?;
-    let format = reader.format();
-    let image = reader.decode().map_err(|err| {
-        debug!("Failed to decode image: {}", err);
+
+    let orientation = decoder.orientation().map_err(|err| {
+        debug!("Failed to read image orientation: {}", err);
         HttpetError::BadRequest
     })?;
 
-    if format == Some(image::ImageFormat::Jpeg) {
-        return Ok(bytes.to_vec());
-    }
+    let mut image = image::DynamicImage::from_decoder(decoder).map_err(|err| {
+        debug!("Failed to decode image: {}", err);
+        HttpetError::BadRequest
+    })?;
+    image.apply_orientation(orientation);
 
     let mut output = Vec::new();
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new(&mut output);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 85);
     encoder
         .encode_image(&image)
         .map_err(|err| HttpetError::InternalServerError(err.to_string()))?;
@@ -734,6 +743,7 @@ fn format_date(date: &NaiveDate) -> String {
 mod tests {
 
     use super::*;
+    use image::GenericImageView;
 
     #[test]
     fn test_normalize_image_to_jpeg() {
@@ -741,9 +751,53 @@ mod tests {
         let _ = setup_logging(true);
         let jpeg_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/images/dog/100.jpg"));
         let normalized = normalize_image_to_jpeg(jpeg_bytes).expect("normalize jpeg");
-        assert_eq!(normalized, jpeg_bytes);
+        assert_eq!(
+            image::guess_format(&normalized).expect("guess normalized format"),
+            image::ImageFormat::Jpeg
+        );
+        let original_image = image::load_from_memory(jpeg_bytes).expect("decode original image");
+        let normalized_image =
+            image::load_from_memory(&normalized).expect("decode normalized image");
+        assert_eq!(normalized_image.dimensions(), original_image.dimensions());
         assert!(normalize_image_to_jpeg(&[]).is_err());
         assert!(normalize_image_to_jpeg(&[0xFF, 0xD8, 0x00, 0xFF, 0xD9]).is_err());
         assert!(normalize_image_to_jpeg(b"This is not a JPEG file.").is_err());
+    }
+
+    #[test]
+    fn test_normalize_image_to_jpeg_strips_exif_marker() {
+        let jpeg_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/images/dog/100.jpg"));
+        let with_exif = add_fake_exif_segment(jpeg_bytes);
+        assert!(contains_bytes(&with_exif, b"Exif\0\0"));
+
+        let normalized = normalize_image_to_jpeg(&with_exif).expect("normalize exif jpeg");
+        assert_eq!(
+            image::guess_format(&normalized).expect("guess normalized format"),
+            image::ImageFormat::Jpeg
+        );
+        assert!(!contains_bytes(&normalized, b"Exif\0\0"));
+    }
+
+    fn add_fake_exif_segment(jpeg_bytes: &[u8]) -> Vec<u8> {
+        assert!(jpeg_bytes.starts_with(&[0xFF, 0xD8]));
+        let payload = b"Exif\0\0FAKE-EXIF-DATA";
+        let segment_len = (payload.len() + 2) as u16;
+
+        let mut output = Vec::with_capacity(jpeg_bytes.len() + payload.len() + 4);
+        output.extend_from_slice(&jpeg_bytes[..2]);
+        output.extend_from_slice(&[0xFF, 0xE1]);
+        output.extend_from_slice(&segment_len.to_be_bytes());
+        output.extend_from_slice(payload);
+        output.extend_from_slice(&jpeg_bytes[2..]);
+        output
+    }
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        if needle.is_empty() {
+            return true;
+        }
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
     }
 }
