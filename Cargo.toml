@@ -7,11 +7,11 @@ edition = "2024"
 default-run = "httpet"
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 askama = "0.15.4"
 askama_web = { version = "0.15.1", features = ["axum-0.8"] }
 axum = { version = "0.8.8", features = ["macros", "multipart"] }
-clap = { version = "4.5.58", features = ["derive", "env"] }
+clap = { version = "4.5.60", features = ["derive", "env"] }
 chrono = "0.4.42"
 sea-orm = "1.1.19"
 sea-orm-migration = { version = "1.1.19", features = [
@@ -19,7 +19,7 @@ sea-orm-migration = { version = "1.1.19", features = [
     "runtime-tokio-rustls",
 ], default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
-simple_logger = "5.1.0"
+simple_logger = "5.2.0"
 tokio = { version = "1.49.0", features = [
     "macros",
     "net",
