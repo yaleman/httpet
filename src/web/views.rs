@@ -155,14 +155,22 @@ pub(crate) async fn status_info_view(
     status_info_response(state, pet, path.status_code).await
 }
 
+#[inline(always)]
+fn check_valid_status_code(status_code: u16) -> Result<(), HttpetError> {
+    if status_code < 100 || status_code > 599 {
+        Err(HttpetError::BadRequest)
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) async fn status_info_view_subdomain(
     domain: AnimalDomain,
     State(state): State<AppState>,
     Path(status_code): Path<u16>,
 ) -> Result<Response, HttpetError> {
-    if !(100..=599).contains(&status_code) {
-        return Err(HttpetError::BadRequest);
-    }
+    check_valid_status_code(status_code)?;
+
     if let Some(pet) = domain.animal {
         let pet = normalize_pet_name_strict(&pet)?;
         return status_info_response(state, pet, status_code).await;
@@ -221,6 +229,8 @@ async fn status_info_response(
     pet: String,
     status_code: u16,
 ) -> Result<Response, HttpetError> {
+    check_valid_status_code(status_code)?;
+
     let enabled = state.enabled_pets.read().await.contains(&pet);
     if !enabled {
         return Err(HttpetError::NeedsVote(state.base_url(), pet));
@@ -265,9 +275,8 @@ async fn preview_image_response(
     pet: String,
     status_code: u16,
 ) -> Result<Response, HttpetError> {
-    if !(100..=599).contains(&status_code) {
-        return Err(HttpetError::BadRequest);
-    }
+    check_valid_status_code(status_code)?;
+
     let enabled = state.enabled_pets.read().await.contains(&pet);
     if !enabled {
         return Err(HttpetError::NeedsVote(state.base_url(), pet));
@@ -353,6 +362,7 @@ async fn random_pet_with_status(
     state: &AppState,
     status_code: u16,
 ) -> Result<Option<String>, HttpetError> {
+    check_valid_status_code(status_code)?;
     let enabled = state.enabled_pets.read().await.clone();
     if enabled.is_empty() {
         return Ok(None);

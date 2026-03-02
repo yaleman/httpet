@@ -382,6 +382,7 @@ async fn pet_status_handler(
 fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
     let static_service = ServeDir::new("./static").append_index_html_on_directories(false);
     let admin_routes = Router::new()
+        .route("/admin", axum::routing::get(admin_handler))
         .route("/admin/", axum::routing::get(admin_handler))
         .route("/admin/pets", axum::routing::post(create_pet_handler))
         .route(
