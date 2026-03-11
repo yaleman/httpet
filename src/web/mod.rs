@@ -356,6 +356,9 @@ async fn pet_or_status_handler(
     headers: HeaderMap,
     Path(segment): Path<String>,
 ) -> Result<axum::response::Response, HttpetError> {
+    if segment == "admin" {
+        return Ok(Redirect::to("/admin/").into_response());
+    }
     if let Ok(status_code) = segment.parse::<u16>() {
         return get_status_handler(domain, State(state), headers, Path(status_code)).await;
     }
