@@ -155,9 +155,8 @@ pub(crate) async fn status_info_view(
     status_info_response(state, pet, path.status_code).await
 }
 
-#[inline(always)]
 fn check_valid_status_code(status_code: u16) -> Result<(), HttpetError> {
-    if status_code < 100 || status_code > 599 {
+    if !(100..=599).contains(&status_code) {
         Err(HttpetError::BadRequest)
     } else {
         Ok(())
