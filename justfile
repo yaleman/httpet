@@ -139,3 +139,7 @@ trivy_image:
 # Run trivy on the repo
 trivy_repo:
     trivy repo $(pwd) --skip-dirs 'target/**' --skip-files .envrc -d
+
+
+pull_remote:
+     rsync -rv "$SERVER_DIR/images/" images
