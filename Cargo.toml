@@ -1,7 +1,7 @@
 [package]
 name = "httpet"
 description = "Code for httpet.org"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 
 default-run = "httpet"

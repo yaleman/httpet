@@ -208,6 +208,7 @@ pub(crate) async fn preview_image_handler(
     Path(path): Path<PreviewPath>,
 ) -> Result<Response, HttpetError> {
     let pet = normalize_pet_name_strict(&path.pet)?;
+    // TODO this should redirect to the domain URL
     preview_image_response(state, pet, path.status_code).await
 }
 

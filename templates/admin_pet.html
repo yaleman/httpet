@@ -52,6 +52,35 @@
     </div>
   </div>
 </section>
+<section class="card">
+  <form method="post" action="/admin/images?redirect_to_pet=true" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <input type="hidden" name="pet" value="{{ pet_name }}" />
+    <label>
+      Status code
+      <input type="number" name="status_code" min="100" max="599" placeholder="404" required>
+    </label>
+    <label>
+      Image
+      <input type="file" name="image" accept="image/*" required>
+    </label>
+    <button type="submit">Upload image</button>
+  </form>
+</section>
+<section class="card">
+  <form method="post" action="/admin/pets/{{ pet_name }}?redirect_to_pet=true">
+    <label>
+      Status
+      <select name="status">
+        <option value="enabled" {% if status_label == "enabled" %}selected{% endif %}>Enabled</option>
+        <option value="voting" {% if status_label == "voting" %}selected{% endif %}>Voting</option>
+        <option value="submitted" {% if status_label == "submitted" %}selected{% endif %}>Submitted</option>
+      </select>
+    </label>
+    <button type="submit">Save</button>
+  </form>
+</section>
+
 {% if has_unknown_files %}
 <section class="card">
   <h2>Unrecognized images</h2>

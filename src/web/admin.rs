@@ -74,6 +74,7 @@ pub(crate) struct AdminTemplate {
 #[derive(Template, WebTemplate)]
 #[template(path = "admin_pet.html")]
 pub(crate) struct AdminPetTemplate {
+    csrf_token: String,
     pet_name: String,
     public_url: String,
     available_codes: Vec<u16>,
@@ -275,6 +276,7 @@ pub(crate) async fn admin_pet_view(
         None => 0,
     };
 
+    let csrf_token = csrf_token(&session).await?;
     Ok(AdminPetTemplate {
         pet_name: pet_name.clone(),
         public_url: state.pet_base_url(&pet_name),
@@ -288,6 +290,7 @@ pub(crate) async fn admin_pet_view(
         has_flash,
         flash_message,
         flash_class,
+        csrf_token,
     })
 }
 
@@ -420,9 +423,15 @@ pub(crate) async fn delete_pet_view(
     })
 }
 
+#[derive(Deserialize, Debug)]
+pub(crate) struct UpdatePetHandlerQuery {
+    redirect_to_pet: Option<bool>,
+}
+
 pub(crate) async fn update_pet_handler(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<UpdatePetHandlerQuery>,
     Form(form): Form<PetUpdateForm>,
 ) -> Result<Redirect, HttpetError> {
     let name = normalize_pet_name_strict(&name)?;
@@ -431,6 +440,9 @@ pub(crate) async fn update_pet_handler(
     let status =
         pets::PetStatus::from_str(status_value.as_str()).map_err(|_| HttpetError::BadRequest)?;
     state.create_or_update_pet(&name, status).await?;
+    if query.redirect_to_pet.unwrap_or(false) {
+        return Ok(Redirect::to(&format!("/admin/pets/{}", name)));
+    }
     Ok(Redirect::to("/admin/"))
 }
 
@@ -449,8 +461,14 @@ pub(crate) async fn create_pet_handler(
     Ok(Redirect::to("/admin/"))
 }
 
+#[derive(Deserialize, Debug)]
+pub(crate) struct UploadImageQuery {
+    redirect_to_pet: Option<bool>,
+}
+
 pub(crate) async fn upload_image_handler(
     State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<UploadImageQuery>,
     session: Session,
     mut multipart: Multipart,
 ) -> Result<Redirect, HttpetError> {
@@ -556,6 +574,9 @@ pub(crate) async fn upload_image_handler(
         .as_deref()
         .filter(|target| target.starts_with("/admin/"))
         .unwrap_or("/admin/");
+    if query.redirect_to_pet.unwrap_or(false) {
+        return Ok(Redirect::to(&format!("/admin/pets/{}", pet_name)));
+    }
     Ok(Redirect::to(redirect_target))
 }
 

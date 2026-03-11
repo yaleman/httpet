@@ -1,13 +1,17 @@
 {
-	"html": {
-		"parser": {
-			"interpolation": false
-		}
-	},
-	"overrides": [
-		{
-			"formatter": { "enabled": true },
-			"linter": { "enabled": true }
-		}
-	]
+	"$schema": "https://biomejs.dev/schemas/2.4.5/schema.json",
+    "files": {
+        "includes": ["templates", "static"]
+    },
+    "html": {
+        "parser": {
+            "interpolation": false
+        }
+    },
+    "overrides": [
+        {
+            "formatter": { "enabled": true },
+            "linter": { "enabled": true }
+        }
+    ]
 }
