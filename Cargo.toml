@@ -9,7 +9,7 @@ default-run = "httpet"
 [dependencies]
 anyhow = "1.0.102"
 askama = "0.15.4"
-askama_web = { version = "0.15.1", features = ["axum-0.8"] }
+askama_web = { version = "0.15.2", features = ["axum-0.8"] }
 axum = { version = "0.8.8", features = ["macros", "multipart"] }
 clap = { version = "4.6.0", features = ["derive", "env"] }
 chrono = "0.4.44"
