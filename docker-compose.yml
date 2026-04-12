@@ -2,6 +2,7 @@ services:
   httpet:
     image: ghcr.io/yaleman/httpet:latest
     pull_policy: always
+    restart: unless-stopped
     ports:
       - "4200:9000"
     environment:

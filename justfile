@@ -68,7 +68,7 @@ check: codespell clippy test doc_check
 
 # Spell check the things
 codespell:
-    codespell -c \
+    uvx codespell -c \
     --ignore-words .codespell_ignore \
     --skip='./target' \
     --skip='./Cargo.lock' \
