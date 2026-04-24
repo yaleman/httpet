@@ -36,7 +36,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Build image (local)
