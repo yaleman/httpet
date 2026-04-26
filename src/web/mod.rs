@@ -453,7 +453,7 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
         .route("/{segment}", routing::get(pet_or_status_handler))
         .nest_service("/static", routing::get_service(static_service))
         .layer(session_layer)
-        .layer(DefaultBodyLimit::max(4096 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(20 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             not_found_template,
@@ -619,6 +619,20 @@ mod tests {
             .map(|value| value.to_string());
         let bytes = body.collect().await.expect("collect body").to_bytes();
         (String::from_utf8_lossy(&bytes).to_string(), cookie)
+    }
+
+    async fn admin_csrf_cookie(app: &Router) -> (String, String) {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/admin/")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::empty())
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        let (body, cookie) = read_body_and_cookie(response).await;
+        let csrf_token = extract_csrf_token(&body);
+        let cookie = cookie.expect("missing session cookie");
+        (csrf_token, cookie)
     }
 
     fn extract_csrf_token(body: &str) -> String {
@@ -1529,15 +1543,19 @@ mod tests {
     #[tokio::test]
     async fn admin_update_toggles_enabled() {
         let (state, app) = get_test_app().await;
+        let (csrf_token, cookie) = admin_csrf_cookie(&app).await;
 
         let request = Request::builder()
             .method("POST")
             .uri("/admin/pets/otter")
             .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
             .header("host", TEST_BASE_DOMAIN)
-            .body(Body::from("status=enabled"))
+            .header("cookie", cookie)
+            .body(Body::from(format!(
+                "csrf_token={csrf_token}&status=enabled"
+            )))
             .expect("create request");
-        let response = app.oneshot(request).await.expect("send request");
+        let response = app.clone().oneshot(request).await.expect("send request");
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
 
         let pet = pets::Entity::find()
@@ -1553,7 +1571,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_update_requires_csrf() {
+        let (state, app) = get_test_app().await;
+        state
+            .create_or_update_pet("otter", pets::PetStatus::Submitted)
+            .await
+            .expect("create pet");
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/admin/pets/otter")
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header("host", TEST_BASE_DOMAIN)
+            .body(Body::from("status=enabled"))
+            .expect("create request");
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let pet = pets::Entity::find()
+            .filter(pets::Column::Name.eq("otter"))
+            .one(state.db.as_ref())
+            .await
+            .expect("fetch pet")
+            .expect("pet exists");
+        assert_eq!(pet.status, pets::PetStatus::Submitted);
+    }
+
+    #[tokio::test]
     async fn admin_create_pet_adds_dog() {
+        let (state, app) = get_test_app().await;
+        let (csrf_token, cookie) = admin_csrf_cookie(&app).await;
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/admin/pets")
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header("host", TEST_BASE_DOMAIN)
+            .header("cookie", cookie)
+            .body(Body::from(format!(
+                "csrf_token={csrf_token}&name=dog&status=enabled"
+            )))
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let pet = pets::Entity::find()
+            .filter(pets::Column::Name.eq("dog"))
+            .one(state.db.as_ref())
+            .await
+            .expect("fetch pet")
+            .expect("pet exists");
+        assert_eq!(pet.status, pets::PetStatus::Enabled);
+    }
+
+    #[tokio::test]
+    async fn admin_create_pet_requires_csrf() {
         let (state, app) = get_test_app().await;
 
         let request = Request::builder()
@@ -1564,15 +1636,14 @@ mod tests {
             .body(Body::from("name=dog&status=enabled"))
             .expect("create request");
         let response = app.oneshot(request).await.expect("send request");
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
         let pet = pets::Entity::find()
             .filter(pets::Column::Name.eq("dog"))
             .one(state.db.as_ref())
             .await
-            .expect("fetch pet")
-            .expect("pet exists");
-        assert_eq!(pet.status, pets::PetStatus::Enabled);
+            .expect("fetch pet");
+        assert!(pet.is_none());
     }
 
     #[tokio::test]

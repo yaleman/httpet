@@ -69,6 +69,7 @@
 </section>
 <section class="card">
   <form method="post" action="/admin/pets/{{ pet_name }}?redirect_to_pet=true">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <label>
       Status
       <select name="status">
