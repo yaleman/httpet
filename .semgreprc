@@ -1,0 +1,1 @@
+--exclude-rule python.django.security.django-no-csrf-token.django-no-csrf-token

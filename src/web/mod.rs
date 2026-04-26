@@ -821,6 +821,8 @@ mod tests {
         let (body, cookie) = read_body_and_cookie(response).await;
         let csrf_token = extract_csrf_token(&body);
         let cookie = cookie.expect("missing session cookie");
+        assert!(body.contains(r#"<form method="post" action="/vote/cat">"#));
+        assert!(body.contains(&format!(r#"name="csrf_token" value="{csrf_token}""#)));
 
         for _ in 0..2 {
             let request = Request::builder()
@@ -848,6 +850,21 @@ mod tests {
             .expect("vote exists");
 
         assert_eq!(vote.vote_count, 2);
+    }
+
+    #[tokio::test]
+    async fn vote_endpoint_requires_csrf() {
+        let (_state, app) = get_test_app().await;
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/vote/cat")
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from("csrf_token=bad-token"))
+            .expect("create request");
+        let response = app.clone().oneshot(request).await.expect("send request");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
