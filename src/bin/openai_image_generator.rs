@@ -1183,7 +1183,7 @@ async fn main() -> Result<()> {
     }
 
     // Pick the highest fun score. If tied, keep the first (deterministic).
-    accepted.sort_by(|a, b| b.1.score.cmp(&a.1.score));
+    accepted.sort_by_key(|b| std::cmp::Reverse(b.1.score));
     let (gag, best_fun) = accepted
         .into_iter()
         .next()

@@ -1,20 +1,19 @@
 //! Web server/views/everything
 
-use std::net::SocketAddr;
-use std::path::{Path as StdPath, PathBuf};
-use std::str::FromStr;
-
 use crate::cli::CliOptions;
 use crate::constants::{CSRF_SESSION_LENGTH, IMAGE_DIR, X_HTTPET_ANIMAL};
 use crate::db::entities::pets;
-use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::http::HeaderMap;
 use axum::response::Redirect;
+use axum::{Router, routing};
 use rand::prelude::IndexedRandom;
 use sea_orm::{DatabaseTransaction, IntoActiveModel, TransactionTrait};
 use serde::Deserialize;
 use serde_json::json;
+use std::net::SocketAddr;
+use std::path::{Path as StdPath, PathBuf};
+use std::str::FromStr;
 use time::Duration;
 use tokio::sync::RwLock;
 use tower_http::services::ServeDir;
@@ -29,8 +28,6 @@ mod middleware;
 mod prelude;
 mod views;
 
-use prelude::*;
-
 use admin::{
     admin_handler, admin_pet_image_handler, admin_pet_upload_view, admin_pet_view,
     create_pet_handler, delete_pet_post, delete_pet_view, update_pet_handler, upload_image_handler,
@@ -38,6 +35,7 @@ use admin::{
 use csrf::validate_csrf;
 use images::{ImageCacheHeaders, apply_cache_headers, is_not_modified, not_modified_response};
 use middleware::{AnimalDomain, admin_base_domain_only, not_found_template, request_logger};
+use prelude::*;
 use url::Url;
 use views::{VotePageTemplate, VoteThanksTemplate};
 
@@ -385,29 +383,29 @@ async fn pet_status_handler(
 fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
     let static_service = ServeDir::new("./static").append_index_html_on_directories(false);
     let admin_routes = Router::new()
-        .route("/admin", axum::routing::get(admin_handler))
-        .route("/admin/", axum::routing::get(admin_handler))
+        .route("/admin", routing::get(admin_handler))
+        .route("/admin/", routing::get(admin_handler))
         .route("/admin/pets", axum::routing::post(create_pet_handler))
         .route(
             "/admin/pets/{name}",
-            axum::routing::get(admin_pet_view).post(update_pet_handler),
+            routing::get(admin_pet_view).post(update_pet_handler),
         )
         .route(
             "/admin/pets/{name}/status/{status_code}",
-            axum::routing::get(admin_pet_upload_view),
+            routing::get(admin_pet_upload_view),
         )
         .route(
             "/admin/pets/{name}/images/{status_code}",
-            axum::routing::get(admin_pet_image_handler),
+            routing::get(admin_pet_image_handler),
         )
         .route(
             "/admin/pets/{name}/delete",
-            axum::routing::get(delete_pet_view).post(delete_pet_post),
+            routing::get(delete_pet_view).post(delete_pet_post),
         )
         .route("/admin/images", axum::routing::post(upload_image_handler))
         .route(
             "/admin/{*wildcard}",
-            axum::routing::get(async move || Redirect::to("/admin/")),
+            routing::get(async move || Redirect::to("/admin/")),
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -423,40 +421,37 @@ fn create_router(state: &AppState) -> Result<Router<AppState>, HttpetError> {
         .with_always_save(true);
     Ok(Router::new()
         .merge(admin_routes)
-        .route("/", axum::routing::get(views::root_handler))
-        .route("/about", axum::routing::get(views::about_view))
+        .route("/", routing::get(views::root_handler))
+        .route("/about", routing::get(views::about_view))
         .route(
             "/info/{pet}/{status_code}",
-            axum::routing::get(views::status_info_view),
+            routing::get(views::status_info_view),
         )
         .route(
             "/info/{status_code}",
-            axum::routing::get(views::status_info_view_subdomain),
+            routing::get(views::status_info_view_subdomain),
         )
         .route(
             "/preview/{pet}/{status_code}",
-            axum::routing::get(views::preview_image_handler),
+            routing::get(views::preview_image_handler),
         )
         .route(
             "/preview/{status_code}",
-            axum::routing::get(views::preview_image_handler_subdomain),
+            routing::get(views::preview_image_handler_subdomain),
         )
         .route(
             "/{status_code}/info",
-            axum::routing::get(views::info_shortcut_handler),
+            routing::get(views::info_shortcut_handler),
         )
         .route("/vote", axum::routing::post(vote_form_handler))
         .route(
             "/vote/{name}",
             axum::routing::post(vote_pet_handler).get(vote_pet_view),
         )
-        .route(
-            "/{pet}/{status_code}",
-            axum::routing::get(pet_status_handler),
-        )
-        .route("/{segment}/", axum::routing::get(pet_or_status_handler))
-        .route("/{segment}", axum::routing::get(pet_or_status_handler))
-        .nest_service("/static", axum::routing::get_service(static_service))
+        .route("/{pet}/{status_code}", routing::get(pet_status_handler))
+        .route("/{segment}/", routing::get(pet_or_status_handler))
+        .route("/{segment}", routing::get(pet_or_status_handler))
+        .nest_service("/static", routing::get_service(static_service))
         .layer(session_layer)
         .layer(DefaultBodyLimit::max(4096 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
