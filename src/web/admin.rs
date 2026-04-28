@@ -24,11 +24,13 @@ use tracing::{debug, instrument};
 
 #[derive(Deserialize)]
 pub(crate) struct PetUpdateForm {
+    csrf_token: Option<String>,
     status: String,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct PetCreateForm {
+    csrf_token: Option<String>,
     name: String,
     status: String,
 }
@@ -430,10 +432,12 @@ pub(crate) struct UpdatePetHandlerQuery {
 
 pub(crate) async fn update_pet_handler(
     State(state): State<AppState>,
+    session: Session,
     Path(name): Path<String>,
     axum::extract::Query(query): axum::extract::Query<UpdatePetHandlerQuery>,
     Form(form): Form<PetUpdateForm>,
 ) -> Result<Redirect, HttpetError> {
+    validate_csrf(&session, form.csrf_token.as_deref().unwrap_or_default()).await?;
     let name = normalize_pet_name_strict(&name)?;
 
     let status_value = form.status.trim().to_ascii_lowercase();
@@ -449,8 +453,10 @@ pub(crate) async fn update_pet_handler(
 #[instrument(skip_all, fields(name = %form.name, status = %form.status))]
 pub(crate) async fn create_pet_handler(
     State(state): State<AppState>,
+    session: Session,
     Form(form): Form<PetCreateForm>,
 ) -> Result<Redirect, HttpetError> {
+    validate_csrf(&session, form.csrf_token.as_deref().unwrap_or_default()).await?;
     let name = normalize_pet_name_strict(&form.name)?;
 
     let status_value = form.status.trim().to_ascii_lowercase();

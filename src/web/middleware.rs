@@ -1,11 +1,12 @@
 use axum::body::Body;
 use axum::extract::{ConnectInfo, FromRequestParts};
+use axum::http::Request;
 use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST, TRANSFER_ENCODING};
 use axum::http::request::Parts;
-use axum::http::{HeaderMap, Request};
 use axum::middleware::Next;
 use axum::response::{Redirect, Response};
 use chrono::{SecondsFormat, Utc};
+use reqwest::header::FORWARDED;
 use serde::Serialize;
 
 use std::net::{IpAddr, SocketAddr};
@@ -113,48 +114,36 @@ pub(crate) async fn not_found_template(
     not_found
 }
 
-pub(crate) async fn request_logger(request: Request<Body>, next: Next) -> Response {
+pub(crate) async fn request_logger(mut request: Request<Body>, next: Next) -> Response {
     let method = request.method().to_string();
     let uri = request.uri().to_string();
     let client_ip = client_ip_from_request(&request);
     let timestamp = current_timestamp();
 
-    let headers = request.headers();
-    let forwarded_for = match parse_forwarded_for_header(headers, &client_ip) {
-        Ok(value) => value,
-        Err(err) => {
-            let response = err.into_response();
-            RequestLog::new(
-                &timestamp,
-                &client_ip,
-                &method,
-                &uri,
-                response.status().as_u16(),
-                None,
-                None,
-            )
-            .print();
-
-            return response;
-        }
+    let x_forwarded_for = if let Some(header) = request.headers_mut().remove(X_FORWARDED_FOR) {
+        parse_forwarded_for_header(&header, &client_ip)
+    } else {
+        None
     };
-    let real_ip = match parse_real_ip_header(headers, &client_ip) {
-        Ok(value) => value,
-        Err(err) => {
-            let response = err.into_response();
-            let status = response.status().as_u16();
-            RequestLog::new(
-                &timestamp,
-                &client_ip,
-                &method,
-                &uri,
-                status,
-                forwarded_for,
-                None,
-            )
-            .print();
-            return response;
-        }
+    let x_real_ip = if let Some(header) = request.headers_mut().remove(X_REAL_IP) {
+        parse_real_ip_header(&header, &client_ip)
+    } else {
+        None
+    };
+
+    let forwarded = if let Some(header) = request.headers_mut().remove(FORWARDED) {
+        parse_forwarded_header(&header)
+            .inspect_err(|_| {
+                warn_invalid_ip_header(
+                    FORWARDED.as_str(),
+                    &header_value_for_log(&header),
+                    &client_ip,
+                )
+            })
+            .ok()
+            .flatten()
+    } else {
+        None
     };
 
     let response = next.run(request).await;
@@ -165,8 +154,9 @@ pub(crate) async fn request_logger(request: Request<Body>, next: Next) -> Respon
         &method,
         &uri,
         status,
-        forwarded_for,
-        real_ip,
+        x_forwarded_for,
+        x_real_ip,
+        forwarded,
     )
     .print();
     response
@@ -203,9 +193,13 @@ struct RequestLog<'a> {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     real_ip: Option<IpAddr>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forwarded: Option<IpAddr>,
 }
 
 impl<'a> RequestLog<'a> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         time: &'a str,
         src: &'a str,
@@ -214,6 +208,7 @@ impl<'a> RequestLog<'a> {
         status: u16,
         forwarded_for: Option<Vec<IpAddr>>,
         real_ip: Option<IpAddr>,
+        forwarded: Option<IpAddr>,
     ) -> Self {
         Self {
             time,
@@ -223,6 +218,7 @@ impl<'a> RequestLog<'a> {
             status,
             forwarded_for,
             real_ip,
+            forwarded,
         }
     }
 
@@ -231,73 +227,97 @@ impl<'a> RequestLog<'a> {
     }
 }
 
-fn parse_forwarded_for_header(
-    headers: &HeaderMap,
-    client_ip: &str,
-) -> Result<Option<Vec<IpAddr>>, HttpetError> {
-    let Some(header) = headers.get("x-forwarded-for") else {
-        return Ok(None);
-    };
+const X_FORWARDED_FOR: &str = "x-forwarded-for";
+const X_REAL_IP: &str = "x-real-ip";
+
+fn parse_forwarded_for_header(header: &HeaderValue, client_ip: &str) -> Option<Vec<IpAddr>> {
     let value = header_value_for_log(header);
-    let parsed = header
-        .to_str()
-        .map_err(|_| invalid_ip_header("x-forwarded-for", &value, client_ip))?;
+    let Ok(parsed) = header.to_str() else {
+        warn_invalid_ip_header(X_FORWARDED_FOR, &value, client_ip);
+        return None;
+    };
     if value.trim().is_empty() {
-        return Err(invalid_ip_header("x-forwarded-for", &value, client_ip));
+        warn_invalid_ip_header(X_FORWARDED_FOR, &value, client_ip);
+        return None;
     }
     let mut ips = Vec::new();
     for part in parsed.split(',') {
         let ip_str = part.trim();
         if ip_str.is_empty() {
-            return Err(invalid_ip_header("x-forwarded-for", &value, client_ip));
+            warn_invalid_ip_header(X_FORWARDED_FOR, &value, client_ip);
+            return None;
         }
-        let ip: IpAddr = ip_str
-            .parse()
-            .map_err(|_| invalid_ip_header("x-forwarded-for", &value, client_ip))?;
+        let Ok(ip) = ip_str.parse() else {
+            warn_invalid_ip_header(X_FORWARDED_FOR, &value, client_ip);
+            return None;
+        };
         ips.push(ip);
     }
-    Ok(Some(ips))
+    Some(ips)
 }
 
-fn parse_real_ip_header(
-    headers: &HeaderMap,
-    client_ip: &str,
-) -> Result<Option<IpAddr>, HttpetError> {
-    let Some(header) = headers.get("x-real-ip") else {
-        return Ok(None);
-    };
+fn parse_real_ip_header(header: &HeaderValue, client_ip: &str) -> Option<IpAddr> {
     let value = header_value_for_log(header);
-    let parsed = header
-        .to_str()
-        .map_err(|_| invalid_ip_header("x-real-ip", &value, client_ip))?;
+    let Ok(parsed) = header.to_str() else {
+        warn_invalid_ip_header(X_REAL_IP, &value, client_ip);
+        return None;
+    };
     let ip_str = parsed.trim();
     if ip_str.is_empty() {
-        return Err(invalid_ip_header("x-real-ip", &value, client_ip));
+        warn_invalid_ip_header(X_REAL_IP, &value, client_ip);
+        return None;
     }
-    let ip: IpAddr = ip_str
-        .parse()
-        .map_err(|_| invalid_ip_header("x-real-ip", &value, client_ip))?;
-    Ok(Some(ip))
+    let Ok(ip) = ip_str.parse() else {
+        warn_invalid_ip_header(X_REAL_IP, &value, client_ip);
+        return None;
+    };
+    Some(ip)
+}
+
+fn parse_forwarded_header(headervalue: &HeaderValue) -> Result<Option<IpAddr>, String> {
+    let ip_str = headervalue
+        .to_str()
+        .map_err(|err| format!("Invalid header value: {}", err))?
+        .trim();
+    if ip_str.is_empty() {
+        return Err("Empty header value".to_string());
+    }
+    let parts: Vec<&str> = ip_str.split(';').collect();
+    for part in parts {
+        if let Some(stripped) = part.trim().strip_prefix("for=") {
+            let ip_str = stripped.trim_matches('"');
+            return ip_str
+                .parse()
+                .map_err(|_| "Invalid IP address in Forwarded header".to_string())
+                .map(Some);
+        }
+    }
+    Ok(None)
 }
 
 fn header_value_for_log(header: &axum::http::HeaderValue) -> String {
     String::from_utf8_lossy(header.as_bytes()).to_string()
 }
 
-fn invalid_ip_header(header: &str, value: &str, client_ip: &str) -> HttpetError {
-    HttpetError::InvalidIpHeader {
-        header: header.to_string(),
-        value: value.to_string(),
-        client_ip: client_ip.to_string(),
-    }
+fn warn_invalid_ip_header(header: &str, value: &str, client_ip: &str) {
+    tracing::warn!(
+        client_ip = %client_ip,
+        header = %header,
+        value = %value,
+        "Ignoring invalid forwarded IP header"
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::http::Request;
+    use axum::http::StatusCode;
+    use axum::routing::get;
     use chrono::DateTime;
     use std::net::{IpAddr, Ipv4Addr};
+    use tower::ServiceExt;
 
     #[test]
     fn current_timestamp_is_rfc3339_utc() {
@@ -317,6 +337,7 @@ mod tests {
                 "POST",
                 "/vote",
                 status,
+                None,
                 None,
                 None,
             );
@@ -372,34 +393,31 @@ mod tests {
             .body(Body::empty())
             .expect("request");
 
-        let parsed = parse_forwarded_for_header(request.headers(), "192.0.2.5")
-            .expect("parse")
-            .expect("present");
+        let parsed = parse_forwarded_for_header(
+            request.headers().get(X_FORWARDED_FOR).expect("no header"),
+            "192.0.2.5",
+        )
+        .expect("present");
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0], IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)));
         assert_eq!(parsed[1], IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2)));
     }
 
     #[test]
-    fn parse_forwarded_for_header_rejects_invalid_ips() {
+    fn parse_forwarded_for_header_ignores_invalid_ips() {
         let request = Request::builder()
             .uri("/")
             .header("x-forwarded-for", "203.0.113.1, nope")
             .body(Body::empty())
             .expect("request");
 
-        let err = parse_forwarded_for_header(request.headers(), "192.0.2.5").expect_err("invalid");
-        let HttpetError::InvalidIpHeader {
-            header,
-            value,
-            client_ip,
-        } = err
-        else {
-            panic!("unexpected error variant");
-        };
-        assert_eq!(header, "x-forwarded-for");
-        assert_eq!(value, "203.0.113.1, nope");
-        assert_eq!(client_ip, "192.0.2.5");
+        assert!(
+            parse_forwarded_for_header(
+                request.headers().get(X_FORWARDED_FOR).expect("no header"),
+                "192.0.2.5"
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -410,31 +428,67 @@ mod tests {
             .body(Body::empty())
             .expect("request");
 
-        let parsed = parse_real_ip_header(request.headers(), "192.0.2.5")
-            .expect("parse")
-            .expect("present");
+        let parsed = parse_real_ip_header(
+            request.headers().get(X_REAL_IP).expect("no header"),
+            "192.0.2.5",
+        )
+        .expect("present");
         assert_eq!(parsed, IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2)));
     }
 
     #[test]
-    fn parse_real_ip_header_rejects_invalid_ip() {
+    fn parse_real_ip_header_ignores_invalid_ip() {
         let request = Request::builder()
             .uri("/")
             .header("x-real-ip", "not-an-ip")
             .body(Body::empty())
             .expect("request");
 
-        let err = parse_real_ip_header(request.headers(), "192.0.2.5").expect_err("invalid");
-        let HttpetError::InvalidIpHeader {
-            header,
-            value,
-            client_ip,
-        } = err
-        else {
-            panic!("unexpected error variant");
-        };
-        assert_eq!(header, "x-real-ip");
-        assert_eq!(value, "not-an-ip");
-        assert_eq!(client_ip, "192.0.2.5");
+        assert!(
+            parse_real_ip_header(
+                request.headers().get(X_REAL_IP).expect("no header"),
+                "192.0.2.5"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn parse_forwarded_header_accepts_for_value() {
+        let request = Request::builder()
+            .uri("/")
+            .header("forwarded", "for=198.51.100.2;proto=https;by=203.0.113.10")
+            .body(Body::empty())
+            .expect("request");
+
+        let parsed = parse_forwarded_header(request.headers().get("forwarded").expect("no header"))
+            .expect("parse result")
+            .expect("ip present");
+        assert_eq!(parsed, IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2)));
+    }
+
+    #[tokio::test]
+    async fn request_logger_strips_invalid_forwarded_headers() {
+        async fn observed_headers(headers: axum::http::HeaderMap) -> StatusCode {
+            if headers.contains_key("x-forwarded-for") || headers.contains_key("x-real-ip") {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::OK
+            }
+        }
+
+        let app = Router::new()
+            .route("/", get(observed_headers))
+            .layer(axum::middleware::from_fn(request_logger));
+
+        let request = Request::builder()
+            .uri("/")
+            .header("x-forwarded-for", "203.0.113.1, nope")
+            .header("x-real-ip", "not-an-ip")
+            .body(Body::empty())
+            .expect("request");
+
+        let response = app.oneshot(request).await.expect("send request");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

@@ -5,6 +5,7 @@
 - This site powers `httpet.org` and animal subdomains like `dog.httpet.org`.
 - Requests to `/<status>` should return a themed response for that animal (e.g., `dog.httpet.org/500`).
 - Subdomain-specific behavior should be driven by the request host (e.g., `Host: dog.httpet.org`).
+- `/admin` is expected to sit behind external authentication routes or proxy auth; the app enforces base-domain routing and CSRF for admin mutations, not an in-app login.
 
 ## Project Structure & Module Organization
 

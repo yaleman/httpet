@@ -13,6 +13,7 @@
   <div class="grid">
     {% for pet_name in orphan_pets %}
     <form method="post" action="/admin/pets">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="name" value="{{ pet_name }}">
       <label>
         Status
@@ -31,6 +32,7 @@
 <section class="card">
   <h2>Add a pet</h2>
   <form method="post" action="/admin/pets">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>
       Name
       <input type="text" name="name" placeholder="dog">
@@ -99,6 +101,7 @@
     {% endif %}
     <div class="pet-actions">
       <form method="post" action="/admin/pets/{{ pet.name }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>
           Status
           <select name="status">
