@@ -29,3 +29,8 @@ description = "Run biome lint"
 [tools]
 biome = "latest"
 semgrep = "latest"
+
+
+[tasks.start]
+run = "cargo run"
+description = "Start the server"
