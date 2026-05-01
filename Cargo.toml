@@ -8,8 +8,8 @@ default-run = "httpet"
 
 [dependencies]
 anyhow = "1.0.102"
-askama = "0.15.6"
-askama_web = { version = "0.15.2", features = ["axum-0.8"] }
+askama = "0.16.0"
+askama_web = { version = "0.16.0", features = ["axum-0.8"] }
 axum = { version = "0.8.9", features = ["macros", "multipart"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 chrono = "0.4.44"
@@ -43,7 +43,7 @@ image = { version = "0.25.10", default-features = false, features = [
     "jpeg",
     "png",
 ] }
-reqwest = { version = "0.13.2", features = ["json"] }
+reqwest = { version = "0.13.3", features = ["json"] }
 base64 = "0.22.1"
 
 [dev-dependencies]
