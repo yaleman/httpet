@@ -9,9 +9,7 @@ pub(crate) use axum::http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
 pub(crate) use axum::response::IntoResponse;
 pub(crate) use chrono::{Duration, Utc};
 pub(crate) use sea_orm::sea_query::{Alias, Expr, JoinType, Order, Query};
-pub(crate) use sea_orm::{
-    ActiveModelTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, Set, StatementBuilder,
-};
+pub(crate) use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, ExprTrait, Set};
 pub(crate) use serde::Deserialize;
 pub(crate) use std::sync::Arc;
 pub(crate) use tower_sessions::Session;

@@ -7,6 +7,7 @@ use crate::{
 use axum::response::{Redirect, Response};
 use base64::Engine;
 use rand::prelude::IndexedRandom;
+
 use serde_json::json;
 use tokio::fs;
 
@@ -442,8 +443,7 @@ pub(crate) async fn root_handler(
         .limit(10)
         .to_owned();
 
-    let stmt = StatementBuilder::build(&top_query, &DatabaseBackend::Sqlite);
-    let rows = db.query_all(stmt).await?;
+    let rows = db.query_all(&top_query).await?;
     let mut top_pets = Vec::with_capacity(rows.len());
     for row in rows {
         let name: String = row.try_get("", "name")?;

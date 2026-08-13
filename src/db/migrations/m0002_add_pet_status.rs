@@ -1,5 +1,5 @@
 use sea_orm_migration::prelude::*;
-use sea_orm_migration::sea_orm::{ConnectionTrait, Statement};
+use sea_orm_migration::sea_orm::ConnectionTrait;
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -21,18 +21,14 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        manager
-            .get_connection()
-            .execute(Statement::from_string(
-                manager.get_database_backend(),
-                r#"UPDATE pets
-SET status = CASE
-    WHEN enabled = 1 THEN 'enabled'
-    ELSE 'voting'
-END"#
-                    .to_string(),
-            ))
-            .await?;
+        let update = Query::update()
+            .table(Pets::Table)
+            .value(
+                Pets::Status,
+                Expr::case(Expr::col(Pets::Enabled).eq(true), "enabled").finally("voting"),
+            )
+            .to_owned();
+        manager.get_connection().execute(&update).await?;
 
         Ok(())
     }
@@ -54,4 +50,5 @@ END"#
 enum Pets {
     Table,
     Status,
+    Enabled,
 }

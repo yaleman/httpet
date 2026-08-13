@@ -13,9 +13,7 @@ use axum::response::{Redirect, Response};
 use chrono::{Duration, NaiveDate, Utc};
 use image::ImageDecoder;
 use sea_orm::sea_query::{Alias, Expr, Query};
-use sea_orm::{
-    ColumnTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, StatementBuilder,
-};
+use sea_orm::{ColumnTrait, EntityTrait, ExprTrait, QueryFilter, QueryOrder};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, ErrorKind};
 use std::path::Path as StdPath;
@@ -146,8 +144,7 @@ pub(crate) async fn admin_handler(
         )
         .group_by_col(votes::Column::PetId)
         .to_owned();
-    let total_stmt = StatementBuilder::build(&total_query, &DatabaseBackend::Sqlite);
-    let total_rows = state.db.query_all(total_stmt).await?;
+    let total_rows = state.db.query_all(&total_query).await?;
     let mut vote_totals: HashMap<i32, i64> = HashMap::new();
     for row in total_rows {
         let pet_id: i32 = row.try_get("", "pet_id")?;
@@ -272,8 +269,7 @@ pub(crate) async fn admin_pet_view(
         )
         .and_where(Expr::col(votes::Column::PetId).eq(pet.id))
         .to_owned();
-    let total_stmt = StatementBuilder::build(&total_query, &DatabaseBackend::Sqlite);
-    let vote_total = match state.db.query_one(total_stmt).await? {
+    let vote_total = match state.db.query_one(&total_query).await? {
         Some(row) => row.try_get("", "total_votes").unwrap_or(0),
         None => 0,
     };
@@ -716,7 +712,7 @@ fn render_vote_chart(pet_name: &str, counts: &[i32]) -> String {
     let width = 720.0;
     let height = 180.0;
     let padding = 18.0;
-    let max = counts.iter().copied().max().unwrap_or(0).max(1) as f32;
+    let max = std::cmp::max(counts.iter().copied().max().unwrap_or(0), 1) as f32;
     let step_x = if counts.len() > 1 {
         (width - padding * 2.0) / (counts.len() as f32 - 1.0)
     } else {
