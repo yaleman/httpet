@@ -1,5 +1,5 @@
 use sea_orm_migration::prelude::*;
-use sea_orm_migration::sea_orm::{ConnectionTrait, DbBackend, Statement};
+use sea_orm_migration::sea_orm::{ConnectionTrait, DbBackend};
 
 #[derive(DeriveMigrationName)]
 pub struct Migration;
@@ -8,28 +8,26 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let backend = manager.get_database_backend();
-        manager
-            .get_connection()
-            .execute(Statement::from_string(
-                backend,
-                r#"UPDATE pets
-SET status = CASE status
-    WHEN 'enabled' THEN 'e'
-    WHEN 'voting' THEN 'v'
-    WHEN 'submitted' THEN 's'
-    ELSE status
-END"#
-                    .to_string(),
-            ))
-            .await?;
+        let update = Query::update()
+            .table(Pets::Table)
+            .value(
+                Pets::Status,
+                Expr::case(Expr::col(Pets::Status).eq("enabled"), "e")
+                    .case(Expr::col(Pets::Status).eq("voting"), "v")
+                    .case(Expr::col(Pets::Status).eq("submitted"), "s")
+                    .finally(Expr::col(Pets::Status)),
+            )
+            .to_owned();
+        manager.get_connection().execute(&update).await?;
 
         if backend != DbBackend::Sqlite {
             manager
-                .get_connection()
-                .execute(Statement::from_string(
-                    backend,
-                    "ALTER TABLE pets ALTER COLUMN status SET DEFAULT 's'".to_string(),
-                ))
+                .alter_table(
+                    Table::alter()
+                        .table(Pets::Table)
+                        .modify_column(ColumnDef::new(Pets::Status).default("s"))
+                        .to_owned(),
+                )
                 .await?;
         }
 
@@ -38,31 +36,35 @@ END"#
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let backend = manager.get_database_backend();
-        manager
-            .get_connection()
-            .execute(Statement::from_string(
-                backend,
-                r#"UPDATE pets
-SET status = CASE status
-    WHEN 'e' THEN 'enabled'
-    WHEN 'v' THEN 'voting'
-    WHEN 's' THEN 'submitted'
-    ELSE status
-END"#
-                    .to_string(),
-            ))
-            .await?;
+        let update = Query::update()
+            .table(Pets::Table)
+            .value(
+                Pets::Status,
+                Expr::case(Expr::col(Pets::Status).eq("e"), "enabled")
+                    .case(Expr::col(Pets::Status).eq("v"), "voting")
+                    .case(Expr::col(Pets::Status).eq("s"), "submitted")
+                    .finally(Expr::col(Pets::Status)),
+            )
+            .to_owned();
+        manager.get_connection().execute(&update).await?;
 
         if backend != DbBackend::Sqlite {
             manager
-                .get_connection()
-                .execute(Statement::from_string(
-                    backend,
-                    "ALTER TABLE pets ALTER COLUMN status SET DEFAULT 'submitted'".to_string(),
-                ))
+                .alter_table(
+                    Table::alter()
+                        .table(Pets::Table)
+                        .modify_column(ColumnDef::new(Pets::Status).default("submitted"))
+                        .to_owned(),
+                )
                 .await?;
         }
 
         Ok(())
     }
+}
+
+#[derive(DeriveIden)]
+enum Pets {
+    Table,
+    Status,
 }

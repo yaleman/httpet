@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use sea_orm::{ActiveValue::Set, IntoActiveModel, TransactionTrait, entity::prelude::*};
+use sea_orm::{ActiveValue::Set, ExprTrait, IntoActiveModel, TransactionTrait, entity::prelude::*};
 
 use crate::{error::HttpetError, web::normalize_pet_name_strict};
 
